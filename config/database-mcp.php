@@ -26,13 +26,16 @@ return [
     | path with the given middleware. Set "register_route" to false to wire the
     | server up yourself in routes/ai.php.
     |
+    | The default guard is Laravel Sanctum. If you authenticate the endpoint
+    | with a different guard (e.g. Passport's "auth:api"), override this.
+    |
     */
 
     'register_route' => env('DATABASE_MCP_REGISTER_ROUTE', true),
 
     'path' => env('DATABASE_MCP_PATH', 'database-mcp'),
 
-    'middleware' => ['auth:api'],
+    'middleware' => ['auth:sanctum'],
 
     /*
     |--------------------------------------------------------------------------

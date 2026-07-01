@@ -82,7 +82,7 @@ read-only. Always configure the dedicated user in any shared or production envir
 | `connection` | `env('DATABASE_MCP_CONNECTION')` | Connection to read from (null = default) |
 | `register_route` | `true` | Auto-register the HTTP route |
 | `path` | `database-mcp` | URL path of the server |
-| `middleware` | `['auth:api']` | Middleware applied to the route |
+| `middleware` | `['auth:sanctum']` | Middleware applied to the route |
 | `gate` | `access-database-mcp` | Ability checked as `can:` middleware (null disables) |
 | `name` | `"{APP_NAME} Database"` | Name advertised to MCP clients |
 | `instructions` | (workflow text) | Guidance the assistant reads on connect |
@@ -94,6 +94,19 @@ Set a project-specific name so the same package reused across projects stays dis
 
 ```dotenv
 MCP_DATABASE_NAME="Acme Database"
+```
+
+### Authentication guard
+
+The route is authenticated with **Laravel Sanctum** (`auth:sanctum`) by default. If your API uses a
+different guard — for example **Laravel Passport** (`auth:api`) — override `middleware` in your own
+`config/database-mcp.php`. Only the keys you set override the package defaults:
+
+```php
+// config/database-mcp.php
+return [
+    'middleware' => ['auth:api'], // Passport guard
+];
 ```
 
 ## Authorization
@@ -122,7 +135,7 @@ use Datomatic\LaravelDatabaseMcp\Servers\DatabaseServer;
 use Laravel\Mcp\Facades\Mcp;
 
 Mcp::web('database-mcp', DatabaseServer::class)
-    ->middleware(['auth:api', 'can:access-database-mcp']);
+    ->middleware(['auth:sanctum', 'can:access-database-mcp']);
 ```
 
 Register it with your MCP client using a project-specific connector name:
