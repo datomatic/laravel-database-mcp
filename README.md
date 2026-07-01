@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/logo-dark.jpg">
+    <source media="(prefers-color-scheme: light)" srcset="branding/logo-light.jpg">
+    <img alt="Laravel Database MCP" src="branding/logo-light.jpg">
+  </picture>
+</p>
+
 # Laravel Database MCP
 
 [![CI](https://github.com/datomatic/laravel-database-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/datomatic/laravel-database-mcp/actions/workflows/ci.yml)
