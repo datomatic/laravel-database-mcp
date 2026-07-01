@@ -8,21 +8,23 @@ use Datomatic\LaravelDatabaseMcp\Servers\DatabaseServer;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Mcp\Facades\Mcp;
+use Override;
 
 use function is_string;
 
 class LaravelDatabaseMcpServiceProvider extends ServiceProvider
 {
+    #[Override]
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__ . '/../config/database-mcp.php', 'database-mcp');
+        $this->mergeConfigFrom(__DIR__.'/../config/database-mcp.php', 'database-mcp');
     }
 
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
             $this->publishes([
-                __DIR__ . '/../config/database-mcp.php' => config_path('database-mcp.php'),
+                __DIR__.'/../config/database-mcp.php' => config_path('database-mcp.php'),
             ], 'database-mcp-config');
         }
 
@@ -51,7 +53,7 @@ class LaravelDatabaseMcpServiceProvider extends ServiceProvider
         $gate = config('database-mcp.gate');
 
         if (is_string($gate) && $gate !== '') {
-            $middleware[] = 'can:' . $gate;
+            $middleware[] = 'can:'.$gate;
         }
 
         Mcp::web((string) config('database-mcp.path', 'database-mcp'), DatabaseServer::class)

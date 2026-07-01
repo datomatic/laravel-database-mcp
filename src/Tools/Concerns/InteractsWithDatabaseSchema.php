@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Datomatic\LaravelDatabaseMcp\Tools\Concerns;
 
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Schema\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -13,7 +13,9 @@ use function array_diff;
 use function array_filter;
 use function array_map;
 use function array_values;
+use function explode;
 use function in_array;
+use function str_contains;
 
 trait InteractsWithDatabaseSchema
 {
@@ -41,7 +43,7 @@ trait InteractsWithDatabaseSchema
     /**
      * Read-only connection used for every database operation.
      */
-    private function databaseConnection(): ConnectionInterface
+    private function databaseConnection(): Connection
     {
         return DB::connection(config('database-mcp.connection'));
     }
@@ -93,6 +95,38 @@ trait InteractsWithDatabaseSchema
     }
 
     /**
+     * Resolve a column reference ("table.column" or bare "column" on the base
+     * table) to its table, column and qualified name, or null when the column
+     * is not allowed or does not belong to the base or a joined table.
+     *
+     * @param  list<string>  $joinedTables
+     * @return array{table: string, column: string, qualified: string}|null
+     */
+    private function resolveQualifiedColumn(string $baseTable, array $joinedTables, string $reference): ?array
+    {
+        if (str_contains($reference, '.')) {
+            [$table, $column] = explode('.', $reference, 2);
+
+            if ($table !== $baseTable && ! in_array($table, $joinedTables, true)) {
+                return null;
+            }
+        } else {
+            $table = $baseTable;
+            $column = $reference;
+        }
+
+        if (! in_array($column, $this->allowedColumns($table), true)) {
+            return null;
+        }
+
+        return [
+            'table' => $table,
+            'column' => $column,
+            'qualified' => $table.'.'.$column,
+        ];
+    }
+
+    /**
      * All foreign keys linking two tables, in either direction.
      *
      * Each candidate is keyed by its foreign key column so callers can
@@ -108,8 +142,8 @@ trait InteractsWithDatabaseSchema
         foreach ($this->schemaBuilder()->getForeignKeys($base) as $foreignKey) {
             if ($foreignKey['foreign_table'] === $related) {
                 $candidates[$foreignKey['columns'][0]] = [
-                    'local' => $base . '.' . $foreignKey['columns'][0],
-                    'foreign' => $related . '.' . $foreignKey['foreign_columns'][0],
+                    'local' => $base.'.'.$foreignKey['columns'][0],
+                    'foreign' => $related.'.'.$foreignKey['foreign_columns'][0],
                 ];
             }
         }
@@ -117,8 +151,8 @@ trait InteractsWithDatabaseSchema
         foreach ($this->schemaBuilder()->getForeignKeys($related) as $foreignKey) {
             if ($foreignKey['foreign_table'] === $base) {
                 $candidates[$foreignKey['columns'][0]] = [
-                    'local' => $base . '.' . $foreignKey['foreign_columns'][0],
-                    'foreign' => $related . '.' . $foreignKey['columns'][0],
+                    'local' => $base.'.'.$foreignKey['foreign_columns'][0],
+                    'foreign' => $related.'.'.$foreignKey['columns'][0],
                 ];
             }
         }

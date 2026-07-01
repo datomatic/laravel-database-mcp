@@ -14,6 +14,7 @@ use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Override;
 
 use function array_filter;
 use function array_map;
@@ -21,7 +22,7 @@ use function array_values;
 use function in_array;
 use function json_encode;
 
-#[Description('Inspect the database structure. Without arguments returns the list of allowed tables and their relationships (foreign keys). With a table argument returns that table\'s columns, types and relationships. Use this before query_database to discover table and column names.')]
+#[Description("Inspect the database structure. Without arguments returns the list of allowed tables and their relationships (foreign keys). With a table argument returns that table's columns, types and relationships. Use this before query_database to discover table and column names.")]
 class DescribeDatabaseTool extends Tool
 {
     use InteractsWithDatabaseSchema;
@@ -101,7 +102,7 @@ class DescribeDatabaseTool extends Tool
 
             $relationships[] = [
                 'column' => $foreignKey['columns'][0],
-                'references' => $foreignKey['foreign_table'] . '.' . $foreignKey['foreign_columns'][0],
+                'references' => $foreignKey['foreign_table'].'.'.$foreignKey['foreign_columns'][0],
             ];
         }
 
@@ -146,6 +147,7 @@ class DescribeDatabaseTool extends Tool
     /**
      * @return array<string, Type>
      */
+    #[Override]
     public function schema(JsonSchema $schema): array
     {
         return [

@@ -62,7 +62,7 @@ return [
     |
     */
 
-    'name' => env('MCP_DATABASE_NAME', env('APP_NAME', 'Laravel') . ' Database'),
+    'name' => env('MCP_DATABASE_NAME', env('APP_NAME', 'Laravel').' Database'),
 
     'instructions' => env('MCP_DATABASE_INSTRUCTIONS', <<<'MARKDOWN'
         Read-only access to the application database. Use `describe_database` to discover
@@ -77,6 +77,17 @@ return [
     */
 
     'max_limit' => env('DATABASE_MCP_MAX_LIMIT', 100),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Aggregate Functions
+    |--------------------------------------------------------------------------
+    |
+    | The aggregate functions the query tool is allowed to build.
+    |
+    */
+
+    'aggregate_functions' => ['SUM', 'COUNT', 'MIN', 'MAX', 'AVG'],
 
     /*
     |--------------------------------------------------------------------------

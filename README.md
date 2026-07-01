@@ -1,5 +1,7 @@
 # Laravel Database MCP
 
+[![CI](https://github.com/datomatic/laravel-database-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/datomatic/laravel-database-mcp/actions/workflows/ci.yml)
+
 A read-only [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
 (Claude Code, Cursor, …) explore and query a Laravel application's database through safe,
 structured parameters — never raw SQL.
@@ -9,7 +11,7 @@ It exposes two tools:
 | Tool | Purpose |
 |------|---------|
 | `describe_database` | Discover tables, columns, types and relationships |
-| `query_database` | Read rows with optional joins, filters and ordering |
+| `query_database` | Read rows with optional joins, filters, ordering, aggregations and pagination |
 
 ## Installation
 
@@ -179,12 +181,18 @@ constraints. Foreign keys pointing at denied tables are filtered out.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `table` | string (required) | Base table |
-| `columns` | string[] | Columns to select; omit for all allowed columns |
+| `columns` | string[] | Columns to select; omit for all allowed columns. Not allowed with `aggregates` |
 | `joins` | object[] | Related tables to join |
+| `aggregates` | object[] | Aggregate expressions (see [Aggregations](#aggregations--grouping)) |
+| `group_by` | string[] | Columns to group by (`table.column` or a base column) |
+| `having` | object[] | Conditions on grouped results (only with `aggregates`) |
 | `filters` | object[] | `WHERE` conditions, ANDed together |
-| `order_by` | string | Column to sort by |
+| `order_by` | string | Column to sort by (in aggregate mode: an alias or a group_by column) |
 | `order_direction` | `asc` \| `desc` | Sort direction |
-| `limit` | integer | Max rows (1 to `max_limit`, default 50) |
+| `limit` | integer | Max rows for a non-paginated query (1 to `max_limit`, default 50) |
+| `page` | integer | Page number (1-based); enables pagination |
+| `per_page` | integer | Rows per page (1 to `max_limit`, default 50) |
+| `with_total` | boolean | Include `total`/`last_page` (extra COUNT; ignored in aggregate mode) |
 
 A filter is `{ "column", "operator", "value" }`. Operators: `=`, `!=`, `>`, `>=`, `<`, `<=`,
 `like` (the `like` value is wrapped in `%…%` automatically).
@@ -230,6 +238,70 @@ keys are prefixed with the table name so columns never collide (`orders.code`, `
 When two tables are linked by several foreign keys (e.g. `orders.user_id` and `orders.created_by`
 both point at `users`), joining without `on` returns an error listing the choices. Pass
 `"on": "user_id"` to pick the intended relationship.
+
+### Aggregations & grouping
+
+Pass `aggregates` to compute `SUM`, `COUNT`, `MIN`, `MAX` or `AVG`. In aggregate mode the result is
+grouped: put the non-aggregated columns in `group_by` (not `columns`). Aggregate and group columns
+may reference the base table or any joined table (`table.column`).
+
+```json
+{
+  "table": "orders",
+  "group_by": ["order_status"],
+  "aggregates": [
+    { "function": "SUM", "column": "total", "alias": "total_sum" },
+    { "function": "COUNT", "column": "*", "alias": "orders_count" }
+  ],
+  "having": [ { "target": "total_sum", "operator": ">", "value": "1000" } ],
+  "order_by": "total_sum",
+  "order_direction": "desc"
+}
+```
+
+An aggregate object accepts:
+
+- `function` (required) — `SUM`, `COUNT`, `MIN`, `MAX` or `AVG` (configurable via `aggregate_functions`).
+- `column` (required) — column to aggregate (`table.column` or a base column). Use `*` only with `COUNT`.
+- `alias` (required) — the result key (letters, digits, underscore).
+- `distinct` — aggregate distinct values, e.g. `COUNT(DISTINCT column)`.
+
+`having` filters the grouped rows; each `target` must be an aggregate alias or a `group_by` column,
+with the same operators as filters. Sample response:
+
+```json
+{
+  "table": "orders",
+  "group_by": ["order_status"],
+  "aggregates": ["total_sum", "orders_count"],
+  "rows": [ { "order_status": "completed", "total_sum": 1234.5, "orders_count": 10 } ]
+}
+```
+
+### Pagination
+
+Pass `page` (and optionally `per_page`) for page-based pagination. Add `with_total` to also get the
+total count and last page (an extra `COUNT` query; ignored in aggregate mode).
+
+```json
+{
+  "table": "orders",
+  "columns": ["code", "total"],
+  "order_by": "created_at",
+  "order_direction": "desc",
+  "page": 2,
+  "per_page": 20,
+  "with_total": true
+}
+```
+
+The response carries a `pagination` block:
+
+```json
+{ "pagination": { "page": 2, "per_page": 20, "total": 57, "last_page": 3 } }
+```
+
+Without pagination, use `limit` for a simple capped result.
 
 ### Typical AI workflow
 
