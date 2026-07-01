@@ -111,6 +111,9 @@ return [
 ];
 ```
 
+See the [authentication guide](docs/authentication.md) for step-by-step setup of Sanctum or
+Passport (OAuth 2.1), for both new and existing applications.
+
 ## Authorization
 
 The route is guarded by a gate named in `config('database-mcp.gate')` (default
