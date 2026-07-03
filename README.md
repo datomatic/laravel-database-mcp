@@ -99,12 +99,38 @@ read-only. Always configure the dedicated user in any shared or production envir
 | `max_limit` | `100` | Maximum rows per query |
 | `denied_tables` | auth/infra tables | Tables never exposed |
 | `denied_columns` | secrets | Columns stripped from every result |
+| `table_descriptions` | `[]` | Business meaning attached to a table |
+| `column_descriptions` | `[]` | Business meaning attached to a `table.column` |
 
 Set a project-specific name so the same package reused across projects stays distinguishable:
 
 ```dotenv
 MCP_DATABASE_NAME="Acme Database"
 ```
+
+### Describing your schema
+
+`instructions` gives the assistant global, project-wide guidance on connect. For meaning tied to a
+specific table or column, use `table_descriptions` and `column_descriptions` — the text is added to
+the `describe_database` output so the assistant knows where domain concepts live. The two mechanisms
+are complementary; use both.
+
+```php
+// config/database-mcp.php
+return [
+    'table_descriptions' => [
+        'invoices' => 'Issued invoices. Revenue = SUM(total_amount) where status = paid.',
+        'orders'   => 'Customer orders. grand_total is tax-inclusive.',
+    ],
+
+    'column_descriptions' => [
+        'orders.grand_total' => 'Total in cents, tax included.',
+    ],
+];
+```
+
+Now asking "what's the revenue this month?" leads the assistant to the `invoices` table without you
+spelling out the query.
 
 ### Authentication guard
 

@@ -50,13 +50,14 @@ class DescribeDatabaseTool extends Tool
 
     private function describeOverview(): Response
     {
-        $overview = array_map(fn (string $table): array => [
+        $overview = array_map(fn (string $table): array => array_filter([
             'table' => $table,
+            'description' => $this->tableDescription($table),
             'references' => $this->outgoingRelationships($table),
-        ], $this->allowedTables());
+        ], static fn (mixed $value): bool => $value !== null), $this->allowedTables());
 
         return $this->json([
-            'tables' => $overview,
+            'tables' => array_values($overview),
         ]);
     }
 
@@ -65,24 +66,26 @@ class DescribeDatabaseTool extends Tool
         $allowedColumns = $this->allowedColumns($table);
 
         $columns = array_values(array_map(
-            static fn (array $column): array => [
+            fn (array $column): array => array_filter([
                 'name' => $column['name'],
                 'type' => $column['type'],
                 'nullable' => $column['nullable'],
                 'default' => $column['default'],
-            ],
+                'description' => $this->columnDescription($table, $column['name']),
+            ], static fn (mixed $value, string $key): bool => $key !== 'description' || $value !== null, ARRAY_FILTER_USE_BOTH),
             array_filter(
                 $this->schemaBuilder()->getColumns($table),
                 static fn (array $column): bool => in_array($column['name'], $allowedColumns, true),
             ),
         ));
 
-        return $this->json([
+        return $this->json(array_filter([
             'table' => $table,
+            'description' => $this->tableDescription($table),
             'columns' => $columns,
             'references' => $this->outgoingRelationships($table),
             'referenced_by' => $this->incomingRelationships($table),
-        ]);
+        ], static fn (mixed $value): bool => $value !== null));
     }
 
     /**

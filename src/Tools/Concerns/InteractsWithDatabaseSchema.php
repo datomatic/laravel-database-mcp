@@ -94,6 +94,22 @@ trait InteractsWithDatabaseSchema
         return array_values(array_diff($this->schemaBuilder()->getColumnListing($table), $this->deniedColumns()));
     }
 
+    private function tableDescription(string $table): ?string
+    {
+        $descriptions = (array) config('database-mcp.table_descriptions', []);
+        $description = $descriptions[$table] ?? null;
+
+        return is_string($description) && $description !== '' ? $description : null;
+    }
+
+    private function columnDescription(string $table, string $column): ?string
+    {
+        $descriptions = (array) config('database-mcp.column_descriptions', []);
+        $description = $descriptions["$table.$column"] ?? null;
+
+        return is_string($description) && $description !== '' ? $description : null;
+    }
+
     /**
      * Resolve a column reference ("table.column" or bare "column" on the base
      * table) to its table, column and qualified name, or null when the column

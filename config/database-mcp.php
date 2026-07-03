@@ -133,4 +133,40 @@ return [
         'api_token',
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Table Descriptions
+    |--------------------------------------------------------------------------
+    |
+    | Business meaning attached to specific tables. When set the text is added
+    | to the "describe_database" output so the assistant knows, per project,
+    | what a table represents and where to look. This complements the global
+    | "instructions" above without replacing it.
+    |
+    | Example:
+    |     'invoices' => 'Issued invoices. Revenue = SUM(total_amount) where status = paid.',
+    |
+    */
+
+    'table_descriptions' => [
+        // 'orders' => 'Customer orders. grand_total is tax-inclusive, stored in cents.',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Column Descriptions
+    |--------------------------------------------------------------------------
+    |
+    | Business meaning attached to specific columns, keyed by "table.column".
+    | Added to the per-column output of "describe_database".
+    |
+    | Example:
+    |     'orders.grand_total' => 'Total in cents, tax included.',
+    |
+    */
+
+    'column_descriptions' => [
+        // 'orders.grand_total' => 'Total in cents, tax included.',
+    ],
+
 ];
