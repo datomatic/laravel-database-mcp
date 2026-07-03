@@ -105,7 +105,7 @@ trait InteractsWithDatabaseSchema
     private function columnDescription(string $table, string $column): ?string
     {
         $descriptions = (array) config('database-mcp.column_descriptions', []);
-        $description = $descriptions["$table.$column"] ?? null;
+        $description = $descriptions["{$table}.{$column}"] ?? null;
 
         return is_string($description) && $description !== '' ? $description : null;
     }
