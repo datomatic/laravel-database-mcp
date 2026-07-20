@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Laravel\Mcp\Server\Http\Controllers\OAuthRegisterController;
 use Laravel\Passport\Client;
+use Laravel\Passport\ClientRepository;
+use Override;
 
 class DedupedOAuthRegisterController extends OAuthRegisterController
 {
@@ -25,6 +27,7 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
      *
      * @throws BindingResolutionException
      */
+    #[Override]
     public function __invoke(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
@@ -71,7 +74,7 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
 
         $validated = $validator->validated();
 
-        if (class_exists('Laravel\Passport\ClientRepository') === false) {
+        if (class_exists(ClientRepository::class) === false) {
             return response()->json([
                 'error' => 'server_error',
                 'error_description' => 'OAuth support (Passport) is not installed.',
@@ -92,7 +95,7 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
             $client->update(['redirect_uris' => $redirectUris]);
         } else {
             $clients = Container::getInstance()->make(
-                'Laravel\Passport\ClientRepository'
+                ClientRepository::class
             );
 
             $client = $clients->createAuthorizationCodeGrantClient(

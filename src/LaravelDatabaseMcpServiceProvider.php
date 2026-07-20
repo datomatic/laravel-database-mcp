@@ -14,6 +14,7 @@ use Laravel\Mcp\Facades\Mcp;
 use Laravel\Mcp\Server\Http\Controllers\OAuthRegisterController;
 use Laravel\Passport\Bridge\AccessTokenRepository;
 use Laravel\Passport\Bridge\RefreshTokenRepository;
+use Laravel\Passport\ClientRepository;
 use Override;
 
 use function is_string;
@@ -74,7 +75,7 @@ class LaravelDatabaseMcpServiceProvider extends ServiceProvider
             return;
         }
 
-        if (! class_exists('Laravel\Passport\ClientRepository')) {
+        if (! class_exists(ClientRepository::class)) {
             return;
         }
 
@@ -83,7 +84,7 @@ class LaravelDatabaseMcpServiceProvider extends ServiceProvider
 
     private function registerOAuthTokenLifetimes(): void
     {
-        if (! class_exists('Laravel\Passport\Bridge\AccessTokenRepository')) {
+        if (! class_exists(AccessTokenRepository::class)) {
             return;
         }
 

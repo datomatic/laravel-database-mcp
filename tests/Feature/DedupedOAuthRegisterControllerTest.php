@@ -8,7 +8,7 @@ use Laravel\Mcp\Server\Http\Controllers\OAuthRegisterController;
 use Laravel\Passport\Client;
 
 it('binds the deduping controller by default', function (): void {
-    expect(app(OAuthRegisterController::class))->toBeInstanceOf(DedupedOAuthRegisterController::class);
+    expect(resolve(OAuthRegisterController::class))->toBeInstanceOf(DedupedOAuthRegisterController::class);
 });
 
 it('defaults dedupe_oauth_clients to true', function (): void {
@@ -16,7 +16,7 @@ it('defaults dedupe_oauth_clients to true', function (): void {
 });
 
 it('reuses an existing client with the same name instead of creating a new one', function (): void {
-    $controller = app(OAuthRegisterController::class);
+    $controller = resolve(OAuthRegisterController::class);
 
     $first = $controller(Request::create('/', 'POST', [
         'client_name' => 'Claude Code',
@@ -35,7 +35,7 @@ it('reuses an existing client with the same name instead of creating a new one',
 });
 
 it('creates separate clients for different names', function (): void {
-    $controller = app(OAuthRegisterController::class);
+    $controller = resolve(OAuthRegisterController::class);
 
     $controller(Request::create('/', 'POST', [
         'client_name' => 'Claude Code',

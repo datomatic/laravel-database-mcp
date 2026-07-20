@@ -7,6 +7,7 @@ namespace Datomatic\LaravelDatabaseMcp\Bridge;
 use Carbon\CarbonImmutable;
 use Laravel\Passport\Bridge\RefreshTokenRepository;
 use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
+use Override;
 
 class McpRefreshTokenRepository extends RefreshTokenRepository
 {
@@ -15,6 +16,7 @@ class McpRefreshTokenRepository extends RefreshTokenRepository
      * access token (see McpAccessTokenRepository) before they are persisted,
      * without touching Passport's app-wide refresh token lifetime.
      */
+    #[Override]
     public function persistNewRefreshToken(RefreshTokenEntityInterface $refreshTokenEntity): void
     {
         $ttl = config('database-mcp.oauth_refresh_token_ttl');

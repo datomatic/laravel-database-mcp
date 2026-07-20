@@ -7,6 +7,7 @@ namespace Datomatic\LaravelDatabaseMcp\Bridge;
 use Carbon\CarbonImmutable;
 use Laravel\Passport\Bridge\AccessTokenRepository;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
+use Override;
 
 class McpAccessTokenRepository extends AccessTokenRepository
 {
@@ -15,6 +16,7 @@ class McpAccessTokenRepository extends AccessTokenRepository
      * through Mcp::oauthRoutes(), carrying the "mcp:use" scope) before they
      * are persisted, without touching Passport's app-wide token lifetime.
      */
+    #[Override]
     public function persistNewAccessToken(AccessTokenEntityInterface $accessTokenEntity): void
     {
         $ttl = config('database-mcp.oauth_token_ttl');
