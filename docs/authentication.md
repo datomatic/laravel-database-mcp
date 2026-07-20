@@ -116,6 +116,20 @@ This package reuses the existing client for a given name instead (`database-mcp.
 default `true`) — set `DATABASE_MCP_DEDUPE_OAUTH_CLIENTS=false` to restore the plain
 always-create-a-new-client behaviour.
 
+#### Token lifetime
+
+`Passport::tokensExpireIn()` / `Passport::refreshTokensExpireIn()` are app-wide — they'd also change
+the lifetime of tokens issued to your other Passport clients, not just MCP clients. To change the
+lifetime of *only* the access/refresh tokens issued through `Mcp::oauthRoutes()` (identified by the
+`mcp:use` scope), set these instead:
+
+```dotenv
+DATABASE_MCP_OAUTH_TOKEN_TTL=15          # access token lifetime, in minutes
+DATABASE_MCP_OAUTH_REFRESH_TOKEN_TTL=43200  # refresh token lifetime, in minutes (here: 30 days)
+```
+
+Both default to `null`, which leaves Passport's app-wide lifetime untouched.
+
 ### Existing application already using Passport
 
 1. Add the OAuth routes in `routes/ai.php`:

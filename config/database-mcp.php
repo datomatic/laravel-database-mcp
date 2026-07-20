@@ -70,6 +70,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | OAuth Token Lifetimes
+    |--------------------------------------------------------------------------
+    |
+    | Passport's Passport::tokensExpireIn()/refreshTokensExpireIn() are
+    | app-wide and affect every Passport client, not just MCP clients. Set
+    | these (in minutes) to override the access/refresh token lifetime only
+    | for tokens issued with the "mcp:use" scope, i.e. tokens obtained
+    | through Mcp::oauthRoutes(). Leave null to keep Passport's app-wide
+    | lifetime. Requires Laravel Passport; ignored otherwise.
+    |
+    */
+
+    'oauth_token_ttl' => env('DATABASE_MCP_OAUTH_TOKEN_TTL'),
+
+    'oauth_refresh_token_ttl' => env('DATABASE_MCP_OAUTH_REFRESH_TOKEN_TTL'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Server Identity
     |--------------------------------------------------------------------------
     |

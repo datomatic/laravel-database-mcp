@@ -105,9 +105,9 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
 
         return response()->json([
             'client_id' => (string) $client->id,
-            'grant_types' => $client->grant_types,
+            'grant_types' => $client->getAttribute('grant_types'),
             'response_types' => ['code'],
-            'redirect_uris' => $client->redirect_uris,
+            'redirect_uris' => $client->getAttribute('redirect_uris'),
             'scope' => 'mcp:use',
             'token_endpoint_auth_method' => 'none',
         ], 201);

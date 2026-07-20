@@ -95,6 +95,8 @@ read-only. Always configure the dedicated user in any shared or production envir
 | `middleware` | `['auth:sanctum']` | Middleware applied to the route |
 | `gate` | `access-database-mcp` | Ability checked as `can:` middleware (null disables) |
 | `dedupe_oauth_clients` | `true` | Reuse the Passport client by name instead of registering a new one per OAuth login |
+| `oauth_token_ttl` | `null` | Access token lifetime (minutes) for `mcp:use`-scoped tokens only; null = Passport's app-wide lifetime |
+| `oauth_refresh_token_ttl` | `null` | Refresh token lifetime (minutes) for `mcp:use`-scoped tokens only; null = Passport's app-wide lifetime |
 | `name` | `"{APP_NAME} Database"` | Name advertised to MCP clients |
 | `instructions` | (workflow text) | Guidance the assistant reads on connect |
 | `max_limit` | `100` | Maximum rows per query |
