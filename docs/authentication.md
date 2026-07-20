@@ -110,6 +110,12 @@ client at the server URL with an `Authorization: Bearer <token>` header.
 `Mcp::oauthRoutes()` advertises and uses a single `mcp:use` scope; OAuth here acts as a translation
 layer to the underlying authenticatable model (custom scopes are not currently supported).
 
+MCP clients re-register on every OAuth connection with the same `client_name` but a different
+(ephemeral, loopback) redirect URI, which by default leaves behind a new Passport client per login.
+This package reuses the existing client for a given name instead (`database-mcp.dedupe_oauth_clients`,
+default `true`) — set `DATABASE_MCP_DEDUPE_OAUTH_CLIENTS=false` to restore the plain
+always-create-a-new-client behaviour.
+
 ### Existing application already using Passport
 
 1. Add the OAuth routes in `routes/ai.php`:

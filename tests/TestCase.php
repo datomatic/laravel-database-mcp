@@ -6,6 +6,7 @@ namespace Datomatic\LaravelDatabaseMcp\Tests;
 
 use Datomatic\LaravelDatabaseMcp\LaravelDatabaseMcpServiceProvider;
 use Laravel\Mcp\Server\McpServiceProvider;
+use Laravel\Passport\PassportServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 abstract class TestCase extends Orchestra
@@ -15,6 +16,7 @@ abstract class TestCase extends Orchestra
         parent::setUp();
 
         $this->loadMigrationsFrom(__DIR__.'/database/migrations');
+        $this->loadMigrationsFrom(__DIR__.'/../vendor/laravel/passport/database/migrations');
     }
 
     /**
@@ -24,6 +26,7 @@ abstract class TestCase extends Orchestra
     {
         return [
             McpServiceProvider::class,
+            PassportServiceProvider::class,
             LaravelDatabaseMcpServiceProvider::class,
         ];
     }

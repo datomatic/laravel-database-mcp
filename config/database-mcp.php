@@ -54,6 +54,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | OAuth Client Deduplication
+    |--------------------------------------------------------------------------
+    |
+    | MCP clients doing OAuth (via Mcp::oauthRoutes()) register a new Passport
+    | client on every connection, since the loopback redirect URI they use
+    | changes each run even though the client name stays the same. When
+    | enabled, this package reuses the existing Passport client for a given
+    | name instead of creating a new one, updating its redirect URI in place.
+    | Requires Laravel Passport; ignored otherwise.
+    |
+    */
+
+    'dedupe_oauth_clients' => env('DATABASE_MCP_DEDUPE_OAUTH_CLIENTS', true),
+
+    /*
+    |--------------------------------------------------------------------------
     | Server Identity
     |--------------------------------------------------------------------------
     |

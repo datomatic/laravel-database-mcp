@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Datomatic\LaravelDatabaseMcp;
 
+use Datomatic\LaravelDatabaseMcp\Http\Controllers\DedupedOAuthRegisterController;
 use Datomatic\LaravelDatabaseMcp\Servers\DatabaseServer;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Mcp\Facades\Mcp;
+use Laravel\Mcp\Server\Http\Controllers\OAuthRegisterController;
 use Override;
 
 use function is_string;
@@ -30,6 +32,7 @@ class LaravelDatabaseMcpServiceProvider extends ServiceProvider
 
         $this->registerFallbackGate();
         $this->registerRoute();
+        $this->registerOAuthClientDeduplication();
     }
 
     private function registerFallbackGate(): void
@@ -58,5 +61,18 @@ class LaravelDatabaseMcpServiceProvider extends ServiceProvider
 
         Mcp::web((string) config('database-mcp.path', 'database-mcp'), DatabaseServer::class)
             ->middleware($middleware);
+    }
+
+    private function registerOAuthClientDeduplication(): void
+    {
+        if (config('database-mcp.dedupe_oauth_clients') !== true) {
+            return;
+        }
+
+        if (! class_exists('Laravel\Passport\ClientRepository')) {
+            return;
+        }
+
+        $this->app->bind(OAuthRegisterController::class, DedupedOAuthRegisterController::class);
     }
 }
