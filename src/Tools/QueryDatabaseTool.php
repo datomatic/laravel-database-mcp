@@ -136,6 +136,8 @@ class QueryDatabaseTool extends Tool
 
         $aggregates = $validated['aggregates'] ?? [];
         $aggregateMode = $aggregates !== [];
+        $aggregateAliases = [];
+        $groupColumns = [];
 
         // Column selection --------------------------------------------------
         if ($aggregateMode) {
@@ -197,7 +199,7 @@ class QueryDatabaseTool extends Tool
 
         // Ordering ----------------------------------------------------------
         if (isset($validated['order_by'])) {
-            $orderColumn = $this->resolveOrderColumn($validated['order_by'], $aggregateMode, $aggregateAliases ?? [], $groupColumns ?? [], $tableColumns, $table, $hasJoins);
+            $orderColumn = $this->resolveOrderColumn($validated['order_by'], $aggregateMode, $aggregateAliases, $groupColumns, $tableColumns, $table, $hasJoins);
 
             if ($orderColumn === null) {
                 return Response::error("Order column '{$validated['order_by']}' does not exist or is not allowed.");
