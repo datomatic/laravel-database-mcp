@@ -11,9 +11,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Laravel\Mcp\Server\Http\Controllers\OAuthRegisterController;
+use Laravel\Mcp\Server\Registrar;
 use Laravel\Passport\Client;
 use Laravel\Passport\ClientRepository;
 use Override;
+use Throwable;
 
 class DedupedOAuthRegisterController extends OAuthRegisterController
 {
@@ -34,7 +36,7 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
             'client_name' => ['nullable', 'string', 'min:1', 'max:255'],
             'name' => ['nullable', 'string', 'min:1', 'max:255'],
             'redirect_uris' => ['required', 'array', 'min:1'],
-            'redirect_uris.*' => ['required', 'string', function (string $attribute, $value, $fail): void {
+            'redirect_uris.*' => ['bail', 'required', 'string', function (string $attribute, $value, $fail): void {
                 if (! $this->isValidRedirectUri($value)) {
                     $fail($attribute.' is not a valid URL.');
 
@@ -57,18 +59,17 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
                     $fail($attribute.' is not a permitted redirect domain.');
                 }
             }],
+            'logo_uri' => ['nullable', 'string', 'url:http,https', 'max:2048'],
+            'client_uri' => ['nullable', 'string', 'url:http,https', 'max:2048'],
         ]);
 
         if ($validator->fails()) {
             $errors = $validator->errors();
-
-            $isRedirectError = collect($errors->keys())->contains(
-                fn (string $key): bool => str_starts_with($key, 'redirect_uris')
-            );
+            $redirectError = $errors->first('redirect_uris*');
 
             return response()->json([
-                'error' => $isRedirectError ? 'invalid_redirect_uri' : 'invalid_client_metadata',
-                'error_description' => $errors->first(),
+                'error' => $redirectError !== '' ? 'invalid_redirect_uri' : 'invalid_client_metadata',
+                'error_description' => $redirectError !== '' ? $redirectError : $errors->first(),
             ], 400);
         }
 
@@ -86,24 +87,37 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
         /** @var array<int, string> $redirectUris */
         $redirectUris = $validated['redirect_uris'];
 
-        $client = Client::query()
-            ->where('name', $name)
-            ->where('revoked', false)
-            ->first();
+        try {
+            $client = Client::query()
+                ->where('name', $name)
+                ->where('revoked', false)
+                ->first();
 
-        if ($client instanceof Client) {
-            $client->update(['redirect_uris' => $redirectUris]);
-        } else {
-            $clients = Container::getInstance()->make(
-                ClientRepository::class
-            );
+            if ($client instanceof Client) {
+                $client->update(['redirect_uris' => $redirectUris]);
+            } else {
+                $clients = Container::getInstance()->make(
+                    ClientRepository::class
+                );
 
-            $client = $clients->createAuthorizationCodeGrantClient(
-                name: $name,
-                redirectUris: $redirectUris,
-                confidential: false,
-                enableDeviceFlow: false,
-            );
+                $client = $clients->createAuthorizationCodeGrantClient(
+                    name: $name,
+                    redirectUris: $redirectUris,
+                    confidential: false,
+                    enableDeviceFlow: false,
+                );
+            }
+
+            $this->grantMcpScope($client);
+
+            $metadata = $this->persistClientMetadata($client, $validated);
+        } catch (Throwable $throwable) {
+            report($throwable);
+
+            return response()->json([
+                'error' => 'server_error',
+                'error_description' => 'The client could not be registered.',
+            ], 500);
         }
 
         return response()->json([
@@ -111,8 +125,9 @@ class DedupedOAuthRegisterController extends OAuthRegisterController
             'grant_types' => $client->getAttribute('grant_types'),
             'response_types' => ['code'],
             'redirect_uris' => $client->getAttribute('redirect_uris'),
-            'scope' => 'mcp:use',
+            'scope' => Registrar::OAUTH_SCOPE,
             'token_endpoint_auth_method' => 'none',
+            ...$metadata,
         ], 201);
     }
 

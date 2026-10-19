@@ -8,7 +8,7 @@
         "illuminate/contracts": "^11.0|^12.0|^13.0",
         "illuminate/database": "^11.0|^12.0|^13.0",
         "illuminate/support": "^11.0|^12.0|^13.0",
-        "laravel/mcp": "^0.8|^0.9|^1.0"
+        "laravel/mcp": "^0.9.5|^1.0"
     },
     "require-dev": {
         "driftingly/rector-laravel": "^2.0",
