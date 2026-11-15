@@ -101,16 +101,25 @@ return [
     'instructions' => env('MCP_DATABASE_INSTRUCTIONS', <<<'MARKDOWN'
         Read-only access to the application database. Use `describe_database` to discover
         tables, columns and relationships, then `query_database` to read rows (with joins,
-        filters and ordering). Sensitive tables and columns are hidden.
+        filters and ordering). Sensitive tables and columns are hidden. Columns flagged as
+        "masked" return anonymised values: they cannot be sorted, grouped or pattern-matched,
+        and "searchable" ones can only be looked up by their full exact value.
         MARKDOWN),
 
     /*
     |--------------------------------------------------------------------------
     | Limits
     |--------------------------------------------------------------------------
+    |
+    | "max_limit" caps the rows returned per query. "query_timeout" caps, in
+    | seconds, how long a query may run (MySQL, MariaDB and PostgreSQL; not
+    | supported on SQLite or SQL Server). Set it to null to disable.
+    |
     */
 
     'max_limit' => env('DATABASE_MCP_MAX_LIMIT', 100),
+
+    'query_timeout' => env('DATABASE_MCP_QUERY_TIMEOUT', 10),
 
     /*
     |--------------------------------------------------------------------------
@@ -125,10 +134,37 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Allowed Tables
+    |--------------------------------------------------------------------------
+    |
+    | When set to a list, ONLY matching tables are exposed (an allowlist), and
+    | the deny list below still applies on top. Leave null to expose every
+    | table that is not denied. Entries accept "*" wildcards ("report_*").
+    |
+    */
+
+    'allowed_tables' => null,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Views
+    |--------------------------------------------------------------------------
+    |
+    | Expose database views alongside tables. Views are a convenient way to
+    | hand the assistant pre-joined or pre-aggregated data. Allowed/denied
+    | table lists apply to views too.
+    |
+    */
+
+    'include_views' => env('DATABASE_MCP_INCLUDE_VIEWS', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Denied Tables
     |--------------------------------------------------------------------------
     |
-    | Tables that are never listed, described or queried.
+    | Tables that are never listed, described or queried. Entries accept "*"
+    | wildcards ("telescope_*").
     |
     */
 
@@ -139,15 +175,15 @@ return [
         'job_batches',
         'jobs',
         'migrations',
-        'oauth_access_tokens',
-        'oauth_auth_codes',
-        'oauth_clients',
-        'oauth_device_codes',
-        'oauth_refresh_tokens',
+        'notifications',
+        'oauth_*',
         'password_reset_tokens',
         'password_resets',
         'personal_access_tokens',
+        'pulse_*',
         'sessions',
+        'telescope_*',
+        'webhook_calls',
     ],
 
     /*
@@ -155,16 +191,70 @@ return [
     | Denied Columns
     |--------------------------------------------------------------------------
     |
-    | Columns stripped from every result and description, on any table.
+    | Columns stripped from every result and description. A bare entry applies
+    | to every table ("password"); a "table.column" entry applies only to
+    | matching tables ("users.email"). Both parts accept "*" wildcards
+    | ("*_token", "customers.*_iban").
     |
     */
 
     'denied_columns' => [
         'password',
-        'remember_token',
-        'two_factor_secret',
         'two_factor_recovery_codes',
-        'api_token',
+        '*_secret',
+        '*_token',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Masked Columns
+    |--------------------------------------------------------------------------
+    |
+    | Columns whose values are anonymised in every result instead of being
+    | hidden. Keys use the same patterns as "denied_columns" ("phone",
+    | "users.email", "customers.*_iban"); the first match wins and a denied
+    | column stays denied. The value is a strategy name, or an array with:
+    |
+    |   strategy    "redact"  -> ***
+    |               "partial" -> *******123 (last "visible" chars, default 4)
+    |               "email"   -> m***@acme.com
+    |               "hash"    -> stable pseudonym (HMAC with "mask_key")
+    |   searchable  allow "=" with the full exact value, so rows can be looked
+    |               up by a value the user already knows (default false)
+    |   visible     characters kept by "partial" (default 4)
+    |
+    | Masked columns can never be sorted, grouped, pattern-matched or
+    | aggregated except with COUNT, so their values cannot be reconstructed.
+    |
+    */
+
+    'masked_columns' => [
+        // 'users.email' => ['strategy' => 'email', 'searchable' => true],
+        // 'phone' => 'partial',
+        // 'customers.tax_code' => 'hash',
+    ],
+
+    /*
+    | Key for the "hash" strategy. Defaults to APP_KEY. Set a dedicated key to
+    | keep pseudonyms stable across APP_KEY rotations.
+    */
+
+    'mask_key' => env('DATABASE_MCP_MASK_KEY'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Audit Log
+    |--------------------------------------------------------------------------
+    |
+    | When enabled every tool call is logged with the authenticated user, the
+    | arguments, the outcome and the duration. "channel" picks a logging
+    | channel from config/logging.php (null = the default channel).
+    |
+    */
+
+    'audit_log' => [
+        'enabled' => env('DATABASE_MCP_AUDIT_LOG', false),
+        'channel' => env('DATABASE_MCP_AUDIT_LOG_CHANNEL'),
     ],
 
     /*

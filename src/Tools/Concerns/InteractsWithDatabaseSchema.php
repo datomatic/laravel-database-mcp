@@ -4,17 +4,22 @@ declare(strict_types=1);
 
 namespace Datomatic\LaravelDatabaseMcp\Tools\Concerns;
 
+use Closure;
+use Datomatic\LaravelDatabaseMcp\Support\ColumnMask;
+use Datomatic\LaravelDatabaseMcp\Support\QueryTimeout;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Schema\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
-use function array_diff;
 use function array_filter;
 use function array_map;
+use function array_unique;
 use function array_values;
 use function explode;
 use function in_array;
+use function is_array;
+use function is_string;
 use function str_contains;
 
 trait InteractsWithDatabaseSchema
@@ -25,11 +30,29 @@ trait InteractsWithDatabaseSchema
     private ?array $allowedTablesCache = null;
 
     /**
+     * @var array<string, list<string>>
+     */
+    private array $allowedColumnsCache = [];
+
+    /**
      * @return list<string>
      */
     private function deniedTables(): array
     {
         return array_values((array) config('database-mcp.denied_tables', []));
+    }
+
+    /**
+     * Patterns of the only tables that may be exposed, or null to expose every
+     * table not explicitly denied.
+     *
+     * @return list<string>|null
+     */
+    private function allowlistedTables(): ?array
+    {
+        $allowed = config('database-mcp.allowed_tables');
+
+        return is_array($allowed) ? array_values($allowed) : null;
     }
 
     /**
@@ -53,9 +76,43 @@ trait InteractsWithDatabaseSchema
         return Schema::connection(config('database-mcp.connection'));
     }
 
+    /**
+     * @template TReturn
+     *
+     * @param  Closure(): TReturn  $callback
+     * @return TReturn
+     */
+    private function withQueryTimeout(Closure $callback): mixed
+    {
+        $timeout = config('database-mcp.query_timeout');
+
+        return QueryTimeout::run(
+            $this->databaseConnection(),
+            $timeout === null ? null : (int) $timeout,
+            $callback,
+        );
+    }
+
+    /**
+     * A table is allowed only when its exact name appears in the allowed
+     * listing. Matching against the live listing (rather than asking the
+     * schema builder whether the table exists) rejects schema-qualified or
+     * differently-cased names that would otherwise slip past the deny list.
+     */
     private function isTableAllowed(string $table): bool
     {
-        return ! in_array($table, $this->deniedTables(), true) && $this->schemaBuilder()->hasTable($table);
+        return in_array($table, $this->allowedTables(), true);
+    }
+
+    private function isTableExposed(string $table): bool
+    {
+        if ($this->matchesAny($table, $this->deniedTables())) {
+            return false;
+        }
+
+        $allowlist = $this->allowlistedTables();
+
+        return $allowlist === null || $this->matchesAny($table, $allowlist);
     }
 
     /**
@@ -67,22 +124,29 @@ trait InteractsWithDatabaseSchema
             return $this->allowedTablesCache;
         }
 
-        $connection = $this->databaseConnection();
-        $tables = $this->schemaBuilder()->getTables();
+        $builder = $this->schemaBuilder();
+        $objects = $builder->getTables();
 
-        if (in_array($connection->getDriverName(), ['mysql', 'mariadb'], true)) {
-            $database = $connection->getDatabaseName();
-            $tables = array_filter(
-                $tables,
-                static fn (array $table): bool => ($table['schema'] ?? null) === $database,
+        if ((bool) config('database-mcp.include_views', false)) {
+            $objects = [...$objects, ...$builder->getViews()];
+        }
+
+        // Only expose objects in the connection's own schema(s): the database
+        // on MySQL, the search path on PostgreSQL, "main" on SQLite.
+        $schemas = $builder->getCurrentSchemaListing();
+
+        if ($schemas !== null) {
+            $objects = array_filter(
+                $objects,
+                static fn (array $object): bool => ! isset($object['schema']) || in_array($object['schema'], $schemas, true),
             );
         }
 
-        $names = array_map(static fn (array $table): string => $table['name'], $tables);
+        $names = array_unique(array_map(static fn (array $object): string => $object['name'], $objects));
 
         return $this->allowedTablesCache = array_values(array_filter(
             $names,
-            fn (string $table): bool => ! in_array($table, $this->deniedTables(), true),
+            $this->isTableExposed(...),
         ));
     }
 
@@ -91,7 +155,57 @@ trait InteractsWithDatabaseSchema
      */
     private function allowedColumns(string $table): array
     {
-        return array_values(array_diff($this->schemaBuilder()->getColumnListing($table), $this->deniedColumns()));
+        return $this->allowedColumnsCache[$table] ??= array_values(array_filter(
+            $this->schemaBuilder()->getColumnListing($table),
+            fn (string $column): bool => ! $this->isColumnDenied($table, $column),
+        ));
+    }
+
+    private function isColumnDenied(string $table, string $column): bool
+    {
+        return collect($this->deniedColumns())->contains(
+            fn (string $pattern): bool => $this->matchesColumnPattern($pattern, $table, $column),
+        );
+    }
+
+    /**
+     * The mask applied to a column, or null when the column is not masked.
+     * Keys of "masked_columns" use the same patterns as "denied_columns";
+     * the first matching entry wins.
+     */
+    private function columnMask(string $table, string $column): ?ColumnMask
+    {
+        foreach ((array) config('database-mcp.masked_columns', []) as $pattern => $mask) {
+            if (is_string($pattern) && (is_string($mask) || is_array($mask)) && $this->matchesColumnPattern($pattern, $table, $column)) {
+                return ColumnMask::fromConfig($mask);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * A column pattern is either a bare column pattern applied to every table
+     * ("password", "*_token") or a "table.column" pattern scoped to matching
+     * tables ("users.email", "customers.*_iban").
+     */
+    private function matchesColumnPattern(string $pattern, string $table, string $column): bool
+    {
+        if (! str_contains($pattern, '.')) {
+            return str($column)->is($pattern);
+        }
+
+        [$tablePattern, $columnPattern] = explode('.', $pattern, 2);
+
+        return str($table)->is($tablePattern) && str($column)->is($columnPattern);
+    }
+
+    /**
+     * @param  list<string>  $patterns
+     */
+    private function matchesAny(string $value, array $patterns): bool
+    {
+        return collect($patterns)->contains(static fn (mixed $pattern): bool => is_string($pattern) && str($value)->is($pattern));
     }
 
     private function tableDescription(string $table): ?string

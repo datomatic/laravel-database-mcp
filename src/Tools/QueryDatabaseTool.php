@@ -7,6 +7,8 @@ namespace Datomatic\LaravelDatabaseMcp\Tools;
 use const JSON_UNESCAPED_SLASHES;
 use const JSON_UNESCAPED_UNICODE;
 
+use Datomatic\LaravelDatabaseMcp\Support\AuditLog;
+use Datomatic\LaravelDatabaseMcp\Support\ColumnMask;
 use Datomatic\LaravelDatabaseMcp\Tools\Concerns\InteractsWithDatabaseSchema;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Database\Query\Builder;
@@ -17,6 +19,7 @@ use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
 use Override;
 
+use function array_key_exists;
 use function array_keys;
 use function array_map;
 use function array_values;
@@ -25,11 +28,13 @@ use function count;
 use function implode;
 use function in_array;
 use function is_numeric;
+use function is_scalar;
 use function json_encode;
+use function property_exists;
 use function reset;
 use function strtoupper;
 
-#[Description('Run safe, read-only SELECT queries against allowed tables using structured parameters (no raw SQL). Supports joining related tables through their foreign keys, aggregations (SUM/COUNT/MIN/MAX/AVG) with GROUP BY and HAVING, and page-based pagination.')]
+#[Description('Run safe, read-only SELECT queries against allowed tables using structured parameters (no raw SQL). Supports joining related tables through their foreign keys, filters (comparison, like, in, between, null checks), multi-column sorting, aggregations (SUM/COUNT/MIN/MAX/AVG) with GROUP BY and HAVING, and page-based pagination.')]
 class QueryDatabaseTool extends Tool
 {
     use InteractsWithDatabaseSchema;
@@ -37,13 +42,44 @@ class QueryDatabaseTool extends Tool
     protected string $name = 'query_database';
 
     /**
-     * Operators allowed in filters and HAVING conditions.
+     * Operators allowed in HAVING conditions.
      *
      * @var list<string>
      */
-    private const array ALLOWED_OPERATORS = ['=', '!=', '>', '>=', '<', '<=', 'like'];
+    private const array COMPARISON_OPERATORS = ['=', '!=', '>', '>=', '<', '<=', 'like'];
+
+    /**
+     * Operators allowed in filters (WHERE conditions).
+     *
+     * @var list<string>
+     */
+    private const array FILTER_OPERATORS = [
+        ...self::COMPARISON_OPERATORS,
+        'not_like', 'starts_with', 'ends_with',
+        'in', 'not_in', 'between',
+        'is_null', 'is_not_null',
+    ];
+
+    /**
+     * Filter operators that compare against a list of values.
+     *
+     * @var list<string>
+     */
+    private const array LIST_OPERATORS = ['in', 'not_in', 'between'];
+
+    /**
+     * Filter operators that take no value at all.
+     *
+     * @var list<string>
+     */
+    private const array NULL_OPERATORS = ['is_null', 'is_not_null'];
 
     public function handle(Request $request): Response
+    {
+        return AuditLog::record($this->name, $request, fn (): Response => $this->query($request));
+    }
+
+    private function query(Request $request): Response
     {
         $maxLimit = (int) config('database-mcp.max_limit', 100);
 
@@ -72,14 +108,18 @@ class QueryDatabaseTool extends Tool
             'group_by.*' => ['string'],
             'having' => ['array'],
             'having.*.target' => ['required', 'string'],
-            'having.*.operator' => ['required', 'string', 'in:'.implode(',', self::ALLOWED_OPERATORS)],
+            'having.*.operator' => ['required', 'string', 'in:'.implode(',', self::COMPARISON_OPERATORS)],
             'having.*.value' => ['present'],
             'filters' => ['array'],
             'filters.*.column' => ['required', 'string'],
-            'filters.*.operator' => ['required', 'string', 'in:'.implode(',', self::ALLOWED_OPERATORS)],
-            'filters.*.value' => ['present'],
+            'filters.*.operator' => ['required', 'string', 'in:'.implode(',', self::FILTER_OPERATORS)],
+            'filters.*.value' => ['nullable'],
+            'filters.*.values' => ['array', 'max:1000'],
             'order_by' => ['string'],
             'order_direction' => ['in:asc,desc'],
+            'sort' => ['array'],
+            'sort.*.column' => ['required', 'string'],
+            'sort.*.direction' => ['in:asc,desc'],
             'limit' => ['integer', 'min:1', 'max:'.$maxLimit],
             'page' => ['integer', 'min:1'],
             'per_page' => ['integer', 'min:1', 'max:'.$maxLimit],
@@ -91,8 +131,6 @@ class QueryDatabaseTool extends Tool
         if (! $this->isTableAllowed($table)) {
             return Response::error("Table '{$table}' is not available.");
         }
-
-        $tableColumns = $this->allowedColumns($table);
 
         $query = $this->databaseConnection()->table($table);
 
@@ -138,6 +176,7 @@ class QueryDatabaseTool extends Tool
         $aggregateMode = $aggregates !== [];
         $aggregateAliases = [];
         $groupColumns = [];
+        $masks = [];
 
         // Column selection --------------------------------------------------
         if ($aggregateMode) {
@@ -163,13 +202,14 @@ class QueryDatabaseTool extends Tool
                 return Response::error("'having' can only be used together with 'aggregates'.");
             }
 
-            $columns = $this->resolveColumns($validated['columns'] ?? [], $tableColumns);
+            $columns = $this->resolveColumns($validated['columns'] ?? [], $this->allowedColumns($table));
 
             if ($columns === null) {
                 return Response::error('One or more requested columns do not exist or are not allowed.');
             }
 
             $select = $this->qualifiedSelect($table, $columns, $hasJoins);
+            $masks = $this->resultMasks($table, $columns, $hasJoins);
 
             foreach ($joins as $join) {
                 $relatedColumns = $this->resolveColumns($join['columns'] ?? [], $this->allowedColumns($join['table']));
@@ -179,6 +219,7 @@ class QueryDatabaseTool extends Tool
                 }
 
                 $select = [...$select, ...$this->qualifiedSelect($join['table'], $relatedColumns, true)];
+                $masks = [...$masks, ...$this->resultMasks($join['table'], $relatedColumns, true)];
             }
 
             $query->select($select);
@@ -186,50 +227,80 @@ class QueryDatabaseTool extends Tool
 
         // Filters (WHERE) ---------------------------------------------------
         foreach ($validated['filters'] ?? [] as $filter) {
-            if (! in_array($filter['column'], $tableColumns, true)) {
+            $resolved = $this->resolveQualifiedColumn($table, $joinedTables, $filter['column']);
+
+            if ($resolved === null) {
                 return Response::error("Filter column '{$filter['column']}' does not exist or is not allowed.");
             }
 
-            $query->where(
-                $this->qualify($table, $filter['column'], $hasJoins),
-                $filter['operator'],
-                $this->filterValue($filter['operator'], $filter['value']),
-            );
+            $mask = $this->columnMask($resolved['table'], $resolved['column']);
+
+            if ($mask instanceof ColumnMask && ! in_array($filter['operator'], $this->maskedFilterOperators($mask), true)) {
+                return Response::error("Column '{$filter['column']}' is masked: filters may only use ".implode(', ', $this->maskedFilterOperators($mask)).'.');
+            }
+
+            $error = $this->applyFilter($query, $hasJoins ? $resolved['qualified'] : $resolved['column'], $filter);
+
+            if ($error instanceof Response) {
+                return $error;
+            }
         }
 
         // Ordering ----------------------------------------------------------
-        if (isset($validated['order_by'])) {
-            $orderColumn = $this->resolveOrderColumn($validated['order_by'], $aggregateMode, $aggregateAliases, $groupColumns, $tableColumns, $table, $hasJoins);
+        if (isset($validated['order_by']) && isset($validated['sort'])) {
+            return Response::error("Pass either 'order_by' or 'sort', not both.");
+        }
 
-            if ($orderColumn === null) {
-                return Response::error("Order column '{$validated['order_by']}' does not exist or is not allowed.");
+        $sorts = isset($validated['order_by'])
+            ? [['column' => $validated['order_by'], 'direction' => $validated['order_direction'] ?? 'asc']]
+            : $validated['sort'] ?? [];
+
+        foreach ($sorts as $sort) {
+            if (! $aggregateMode && $this->isMaskedReference($table, $joinedTables, $sort['column'])) {
+                return Response::error("Column '{$sort['column']}' is masked and cannot be used to sort.");
             }
 
-            $query->orderBy($orderColumn, $validated['order_direction'] ?? 'asc');
+            $orderColumn = $this->resolveOrderColumn($sort['column'], $aggregateMode, $aggregateAliases, $groupColumns, $table, $joinedTables, $hasJoins);
+
+            if ($orderColumn === null) {
+                return Response::error("Order column '{$sort['column']}' does not exist or is not allowed.");
+            }
+
+            $query->orderBy($orderColumn, $sort['direction'] ?? 'asc');
         }
 
         // Pagination / limit ------------------------------------------------
         $paginated = isset($validated['page']) || isset($validated['per_page']);
         $pagination = null;
 
+        $countQuery = $paginated && ($validated['with_total'] ?? false) && ! $aggregateMode ? clone $query : null;
+
         if ($paginated) {
-            $page = $validated['page'] ?? 1;
-            $perPage = $validated['per_page'] ?? 50;
+            $pagination = ['page' => $validated['page'] ?? 1, 'per_page' => $validated['per_page'] ?? 50];
 
-            $pagination = ['page' => $page, 'per_page' => $perPage];
-
-            if (($validated['with_total'] ?? false) && ! $aggregateMode) {
-                $total = (clone $query)->count();
-                $pagination['total'] = $total;
-                $pagination['last_page'] = (int) ceil($total / $perPage);
-            }
-
-            $query->forPage($page, $perPage);
+            $query->forPage($pagination['page'], $pagination['per_page']);
         } else {
             $query->limit($validated['limit'] ?? 50);
         }
 
-        $rows = $query->get();
+        [$rows, $total] = $this->withQueryTimeout(static fn (): array => [$query->get(), $countQuery?->count()]);
+
+        if ($masks !== []) {
+            $rows = $rows->map(static function (object $row) use ($masks): object {
+                foreach ($masks as $key => $mask) {
+                    if (property_exists($row, $key)) {
+                        $row->{$key} = $mask->apply($row->{$key});
+                    }
+                }
+
+                return $row;
+            });
+        }
+
+        if ($pagination !== null && $total !== null) {
+            $pagination['total'] = $total;
+            $pagination['last_page'] = (int) ceil($total / $pagination['per_page']);
+        }
 
         $payload = [
             'table' => $table,
@@ -271,6 +342,10 @@ class QueryDatabaseTool extends Tool
                 return Response::error("Group by column '{$reference}' does not exist or is not allowed.");
             }
 
+            if ($this->columnMask($resolved['table'], $resolved['column']) instanceof ColumnMask) {
+                return Response::error("Column '{$reference}' is masked and cannot be used in group_by.");
+            }
+
             $query->groupBy($resolved['qualified']);
             $query->addSelect($resolved['qualified'].' as '.$reference);
             $groupColumns[] = $reference;
@@ -300,6 +375,10 @@ class QueryDatabaseTool extends Tool
 
                 if ($resolved === null) {
                     return Response::error("Aggregate column '{$column}' does not exist or is not allowed.");
+                }
+
+                if ($function !== 'COUNT' && $this->columnMask($resolved['table'], $resolved['column']) instanceof ColumnMask) {
+                    return Response::error("Column '{$column}' is masked: only COUNT can aggregate it.");
                 }
 
                 $wrapped = $grammar->wrap($resolved['qualified']);
@@ -346,9 +425,9 @@ class QueryDatabaseTool extends Tool
     /**
      * @param  list<string>  $aggregateAliases
      * @param  list<string>  $groupColumns
-     * @param  list<string>  $tableColumns
+     * @param  list<string>  $joinedTables
      */
-    private function resolveOrderColumn(string $orderBy, bool $aggregateMode, array $aggregateAliases, array $groupColumns, array $tableColumns, string $table, bool $hasJoins): ?string
+    private function resolveOrderColumn(string $orderBy, bool $aggregateMode, array $aggregateAliases, array $groupColumns, string $table, array $joinedTables, bool $hasJoins): ?string
     {
         if ($aggregateMode) {
             if (in_array($orderBy, $aggregateAliases, true) || in_array($orderBy, $groupColumns, true)) {
@@ -358,11 +437,121 @@ class QueryDatabaseTool extends Tool
             return null;
         }
 
-        if (! in_array($orderBy, $tableColumns, true)) {
+        $resolved = $this->resolveQualifiedColumn($table, $joinedTables, $orderBy);
+
+        if ($resolved === null) {
             return null;
         }
 
-        return $this->qualify($table, $orderBy, $hasJoins);
+        return $hasJoins ? $resolved['qualified'] : $resolved['column'];
+    }
+
+    /**
+     * @param  array{column: string, operator: string, value?: mixed, values?: array<int, mixed>}  $filter
+     */
+    private function applyFilter(Builder $query, string $column, array $filter): ?Response
+    {
+        $operator = $filter['operator'];
+
+        if (in_array($operator, self::NULL_OPERATORS, true)) {
+            match ($operator) {
+                'is_null' => $query->whereNull($column),
+                default => $query->whereNotNull($column),
+            };
+
+            return null;
+        }
+
+        if (in_array($operator, self::LIST_OPERATORS, true)) {
+            $values = $filter['values'] ?? [];
+
+            foreach ($values as $value) {
+                if (! is_scalar($value)) {
+                    return Response::error("Filter '{$filter['column']}' values must be scalars.");
+                }
+            }
+
+            if ($operator === 'between') {
+                if (count($values) !== 2) {
+                    return Response::error("Filter '{$filter['column']}' with 'between' needs exactly two 'values': [min, max].");
+                }
+
+                $query->whereBetween($column, array_values($values));
+
+                return null;
+            }
+
+            if ($values === []) {
+                return Response::error("Filter '{$filter['column']}' with '{$operator}' needs a non-empty 'values' list.");
+            }
+
+            match ($operator) {
+                'in' => $query->whereIn($column, $values),
+                default => $query->whereNotIn($column, $values),
+            };
+
+            return null;
+        }
+
+        if (! array_key_exists('value', $filter)) {
+            return Response::error("Filter '{$filter['column']}' with '{$operator}' needs a 'value'.");
+        }
+
+        $value = $filter['value'];
+
+        match ($operator) {
+            'not_like' => $query->where($column, 'not like', '%'.$value.'%'),
+            'starts_with' => $query->where($column, 'like', $value.'%'),
+            'ends_with' => $query->where($column, 'like', '%'.$value),
+            default => $query->where($column, $operator, $this->filterValue($operator, $value)),
+        };
+
+        return null;
+    }
+
+    /**
+     * Masks to apply to the result rows, keyed by the row key each selected
+     * column ends up under.
+     *
+     * @param  list<string>  $columns
+     * @return array<string, ColumnMask>
+     */
+    private function resultMasks(string $table, array $columns, bool $qualify): array
+    {
+        $masks = [];
+
+        foreach ($columns as $column) {
+            $mask = $this->columnMask($table, $column);
+
+            if ($mask instanceof ColumnMask) {
+                $masks[$qualify ? $table.'.'.$column : $column] = $mask;
+            }
+        }
+
+        return $masks;
+    }
+
+    /**
+     * Operators that cannot reveal a masked value: null checks always, and an
+     * exact match when the column is searchable (the caller must already know
+     * the full value). Pattern matching, ranges and lists stay blocked, since
+     * they would let the value be reconstructed or enumerated.
+     *
+     * @return list<string>
+     */
+    private function maskedFilterOperators(ColumnMask $mask): array
+    {
+        return $mask->searchable ? ['=', ...self::NULL_OPERATORS] : self::NULL_OPERATORS;
+    }
+
+    /**
+     * @param  list<string>  $joinedTables
+     */
+    private function isMaskedReference(string $table, array $joinedTables, string $reference): bool
+    {
+        $resolved = $this->resolveQualifiedColumn($table, $joinedTables, $reference);
+
+        return $resolved !== null && $this->columnMask($resolved['table'], $resolved['column']) instanceof ColumnMask;
     }
 
     private function filterValue(string $operator, mixed $value): mixed
@@ -388,11 +577,6 @@ class QueryDatabaseTool extends Tool
         }
 
         return $requested;
-    }
-
-    private function qualify(string $table, string $column, bool $qualify): string
-    {
-        return $qualify ? $table.'.'.$column : $column;
     }
 
     /**
@@ -449,19 +633,26 @@ class QueryDatabaseTool extends Tool
             'having' => $schema->array()
                 ->items($schema->object([
                     'target' => $schema->string()->description('An aggregate alias or a group_by column.')->required(),
-                    'operator' => $schema->string()->description('One of: '.implode(', ', self::ALLOWED_OPERATORS))->required(),
+                    'operator' => $schema->string()->description('One of: '.implode(', ', self::COMPARISON_OPERATORS))->required(),
                     'value' => $schema->string()->required(),
                 ]))
                 ->description('Conditions on grouped results (only with "aggregates").'),
             'filters' => $schema->array()
                 ->items($schema->object([
-                    'column' => $schema->string()->required(),
-                    'operator' => $schema->string()->description('One of: '.implode(', ', self::ALLOWED_OPERATORS))->required(),
-                    'value' => $schema->string()->required(),
+                    'column' => $schema->string()->description('Column to filter ("table.column" for a joined table, or a base column).')->required(),
+                    'operator' => $schema->string()->description('One of: '.implode(', ', self::FILTER_OPERATORS).'. "like"/"not_like" match anywhere, "starts_with"/"ends_with" match a prefix/suffix.')->required(),
+                    'value' => $schema->string()->description('Value for comparison and like-style operators. Omit for is_null/is_not_null.'),
+                    'values' => $schema->array()->items($schema->string())->description('Values for "in"/"not_in", or [min, max] for "between".'),
                 ]))
-                ->description('WHERE conditions on the base table, ANDed together.'),
-            'order_by' => $schema->string()->description('Column to sort by. In aggregate mode this may be an aggregate alias or a group_by column.'),
-            'order_direction' => $schema->string()->description('asc or desc.'),
+                ->description('WHERE conditions, ANDed together. May target the base table or any joined table. Masked columns (see describe_database) only accept is_null/is_not_null, plus "=" with the full exact value when searchable.'),
+            'order_by' => $schema->string()->description('Single column to sort by ("table.column" for a joined table). In aggregate mode this may be an aggregate alias or a group_by column. Use "sort" for several columns.'),
+            'order_direction' => $schema->string()->description('asc or desc (used with "order_by").'),
+            'sort' => $schema->array()
+                ->items($schema->object([
+                    'column' => $schema->string()->description('Column, aggregate alias or group_by column, as for "order_by".')->required(),
+                    'direction' => $schema->string()->description('asc (default) or desc.'),
+                ]))
+                ->description('Sort by several columns, in order. Do not combine with "order_by".'),
             'limit' => $schema->integer()
                 ->description('Max rows for a non-paginated query (1 to the configured maximum, default 50).')
                 ->min(1),

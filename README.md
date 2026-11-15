@@ -21,6 +21,15 @@ It exposes two tools:
 | `describe_database` | Discover tables, columns, types and relationships |
 | `query_database` | Read rows with optional joins, filters, ordering, aggregations and pagination |
 
+## Requirements
+
+- PHP 8.3+
+- Laravel 12.41.1+ or 13
+- `laravel/mcp` 1.0+
+- MySQL, MariaDB, PostgreSQL, SQLite or SQL Server
+
+Upgrading from 0.x? See [UPGRADE.md](UPGRADE.md) and the [changelog](CHANGELOG.md).
+
 ## Installation
 
 ```bash
@@ -43,16 +52,25 @@ Defence is layered. From outermost to innermost:
    Point it at a database user with `SELECT`-only grants and the assistant physically cannot
    write — the only guarantee that does not rely on application logic.
 2. **No raw SQL.** Tools accept structured parameters only; nothing is interpolated into SQL.
-3. **Identifiers validated against the live schema.** Every table and column must exist and
-   survive the deny lists, or the request is rejected before a query runs.
-4. **Table deny list.** Auth tokens, sessions, jobs, cache and migrations are never exposed
-   (configurable via `denied_tables`).
-5. **Column deny list.** `password`, `remember_token`, `two_factor_*`, `api_token` are stripped
-   from every result and description, even on a wildcard select (configurable via `denied_columns`).
-6. **Row cap.** Results are limited (`max_limit`, default 100).
+3. **Identifiers validated against the live schema.** Every table must appear, by its exact name,
+   in the listing of allowed tables, and every column must exist and survive the deny lists, or
+   the request is rejected before a query runs. Schema-qualified (`otherdb.secrets`) or
+   differently-cased names are rejected.
+4. **Table allow/deny lists.** Auth tokens, sessions, jobs, cache, migrations, notifications,
+   Telescope and Pulse are never exposed (configurable via `denied_tables`). Optionally restrict
+   exposure to an explicit allowlist (`allowed_tables`).
+5. **Column deny list.** `password`, `two_factor_recovery_codes`, `*_token` and `*_secret` are
+   stripped from every result and description, even on a wildcard select (configurable via
+   `denied_columns`, globally or per table).
+6. **Column masking.** Columns the assistant may use but not read in clear are anonymised
+   (`masked_columns`), and the operations that could reconstruct them are blocked.
+7. **Row cap.** Results are limited (`max_limit`, default 100).
+8. **Query timeout.** Each query is capped (`query_timeout`, default 10 seconds) on MySQL, MariaDB
+   and PostgreSQL.
+9. **Audit log.** Optionally log every tool call with the user, arguments and outcome (`audit_log`).
 
-On MySQL the tools only expose tables belonging to the connection's own database, even if the
-user can see other schemas.
+The tools only expose tables in the connection's own schema: the database on MySQL/MariaDB, the
+`search_path` on PostgreSQL, `main` on SQLite.
 
 ### Setting up a read-only database user
 
@@ -99,9 +117,17 @@ read-only. Always configure the dedicated user in any shared or production envir
 | `oauth_refresh_token_ttl` | `null` | Refresh token lifetime (minutes) for `mcp:use`-scoped tokens only; null = Passport's app-wide lifetime |
 | `name` | `"{APP_NAME} Database"` | Name advertised to MCP clients |
 | `instructions` | (workflow text) | Guidance the assistant reads on connect |
-| `max_limit` | `100` | Maximum rows per query |
-| `denied_tables` | auth/infra tables | Tables never exposed |
-| `denied_columns` | secrets | Columns stripped from every result |
+| `max_limit` | `env('DATABASE_MCP_MAX_LIMIT', 100)` | Maximum rows per query |
+| `query_timeout` | `env('DATABASE_MCP_QUERY_TIMEOUT', 10)` | Max seconds a query may run (MySQL, MariaDB, PostgreSQL); null disables |
+| `aggregate_functions` | `SUM, COUNT, MIN, MAX, AVG` | Aggregate functions the query tool may build |
+| `allowed_tables` | `null` | When a list, only matching tables are exposed (wildcards allowed) |
+| `include_views` | `env('DATABASE_MCP_INCLUDE_VIEWS', false)` | Expose database views alongside tables |
+| `denied_tables` | auth/infra tables | Tables never exposed (wildcards allowed) |
+| `denied_columns` | secrets | Columns stripped from every result (`column` or `table.column`, wildcards allowed) |
+| `masked_columns` | `[]` | Columns anonymised in results instead of hidden (see [Masking columns](#masking-columns)) |
+| `mask_key` | `env('DATABASE_MCP_MASK_KEY')` | Key for the `hash` mask (null = `APP_KEY`) |
+| `audit_log.enabled` | `env('DATABASE_MCP_AUDIT_LOG', false)` | Log every tool call |
+| `audit_log.channel` | `env('DATABASE_MCP_AUDIT_LOG_CHANNEL')` | Log channel for the audit log (null = default channel) |
 | `table_descriptions` | `[]` | Business meaning attached to a table |
 | `column_descriptions` | `[]` | Business meaning attached to a `table.column` |
 
@@ -110,6 +136,153 @@ Set a project-specific name so the same package reused across projects stays dis
 ```dotenv
 MCP_DATABASE_NAME="Acme Database"
 ```
+
+### Restricting tables and columns
+
+Both deny lists, and the optional allowlist, accept `*` wildcards (matching is case-sensitive). A
+denied column is either a bare pattern applied to every table, or a `table.column` pattern scoped to
+matching tables:
+
+```php
+// config/database-mcp.php
+return [
+    // Only these tables are visible (the deny list still applies on top).
+    'allowed_tables' => ['orders', 'order_items', 'products', 'report_*'],
+
+    'denied_tables' => ['telescope_*', 'pulse_*', 'sessions', /* ... */],
+
+    'denied_columns' => [
+        'password',
+        '*_token',            // every table
+        'users.email',        // only on users
+        'customers.*_iban',   // only on customers
+    ],
+];
+```
+
+Defaults:
+
+- `denied_tables`: `cache`, `cache_locks`, `failed_jobs`, `job_batches`, `jobs`, `migrations`,
+  `notifications`, `oauth_*`, `password_reset_tokens`, `password_resets`, `personal_access_tokens`,
+  `pulse_*`, `sessions`, `telescope_*`, `webhook_calls`.
+- `denied_columns`: `password`, `two_factor_recovery_codes`, `*_token`, `*_secret`.
+
+Setting `denied_tables` or `denied_columns` in your own `config/database-mcp.php` **replaces** the
+package defaults rather than extending them — copy the defaults over and add your own entries.
+
+A denied table is hidden everywhere: it is not listed, cannot be described, queried or joined, and
+foreign keys pointing at it are dropped from `describe_database`.
+
+### Masking columns
+
+Denying a column hides it completely. Masking keeps it usable but anonymises its value in every
+result — useful for personal data the assistant needs to reason about without reading it.
+
+```php
+// config/database-mcp.php
+return [
+    'masked_columns' => [
+        'users.email'        => ['strategy' => 'email', 'searchable' => true],
+        'phone'              => 'partial',
+        'customers.tax_code' => 'hash',
+        'users.lastname'     => 'redact',
+    ],
+];
+```
+
+Keys use the same patterns as `denied_columns` (bare `column`, `table.column`, `*` wildcards); the
+first matching entry wins, and a denied column stays denied. The value is a strategy name or an
+array with `strategy`, `searchable` and `visible`:
+
+| Strategy | Example output | Notes |
+|----------|----------------|-------|
+| `redact` | `***` | The value is fully hidden |
+| `partial` | `*******567` | Keeps the last `visible` characters (default 4), never more than a third of the value |
+| `email` | `m***@acme.it` | Keeps the first character and the domain |
+| `hash` | `a3f9c1e2b4d70f18` | Stable pseudonym: an HMAC keyed with `mask_key` (or `APP_KEY`), so the same value always gives the same token and rows can be counted or correlated without the real value |
+
+`null` values stay `null`. An unknown strategy falls back to `redact`, so a typo never exposes data.
+
+**What the assistant can do with a masked column.** Any operation that could rebuild the value is
+rejected:
+
+| | Allowed | Rejected |
+|---|---|---|
+| Select | yes, value masked | — |
+| Filters | `is_null`, `is_not_null`; `=` only if `searchable` | every other operator (`like`, `starts_with`, `in`, `between`, `>`…) |
+| Sorting | — | `order_by`, `sort` |
+| Aggregates | `COUNT`, `COUNT(DISTINCT)` | `MIN`, `MAX`, `SUM`, `AVG` |
+| `group_by` / `having` | — | always |
+
+**Searchable columns** accept `=` with the full exact value, so the assistant can find a record
+from a value the user already knows — e.g. "show the orders of mario@acme.it" — while every
+result keeps the email masked:
+
+```json
+{
+  "table": "orders",
+  "columns": ["code", "total"],
+  "joins": [ { "table": "users", "on": "user_id", "columns": ["email"] } ],
+  "filters": [ { "column": "users.email", "operator": "=", "value": "mario@acme.it" } ]
+}
+```
+
+An exact match can confirm that a value exists, but cannot reveal values the caller does not
+already know. Keep `searchable` off for low-entropy columns (phone numbers, tax codes, postcodes),
+where values could be guessed one by one; the [audit log](#audit-log) helps spot such attempts.
+
+`describe_database` flags masked columns so the assistant knows what to expect:
+
+```json
+{ "name": "email", "type": "varchar", "nullable": false, "default": null, "masked": "email", "searchable": true }
+```
+
+**Limits.** Masking protects individual columns. It does not help with free-text columns (`notes`,
+`address`) that may contain personal data anywhere — deny those instead — and it does not prevent
+re-identification through combinations of harmless columns (birth date + postcode + gender). The
+`hash` strategy cannot be searched by token, since computing it would require the key inside the
+database; correlate pseudonymised rows through their ids and foreign keys instead. Rotating
+`APP_KEY` changes every pseudonym; set a dedicated `DATABASE_MCP_MASK_KEY` to keep them stable.
+
+### Views
+
+Set `include_views` to `true` (or `DATABASE_MCP_INCLUDE_VIEWS=true`) to expose database views. Views are a convenient way to hand the
+assistant pre-joined or pre-aggregated data while keeping the underlying tables denied. The allow
+and deny lists apply to views as well.
+
+### Query timeout
+
+`query_timeout` (seconds, default `10`) caps each query so a heavy request cannot tie up the
+database. It is applied per session (`max_execution_time` on MySQL, `max_statement_time` on
+MariaDB, `statement_timeout` on PostgreSQL) and reset after the query. SQLite and SQL Server are
+not limited. Set it to `null` (or `0`) to disable, or tune it with `DATABASE_MCP_QUERY_TIMEOUT`.
+
+On MySQL the limit applies to `SELECT` statements only, which is all this package runs. When the
+limit is hit the database aborts the query and the tool call fails.
+
+### Audit log
+
+```dotenv
+DATABASE_MCP_AUDIT_LOG=true
+DATABASE_MCP_AUDIT_LOG_CHANNEL=database-mcp
+```
+
+Every tool call (`describe_database` and `query_database`) is then logged at `info` level with:
+
+| Key | Content |
+|-----|---------|
+| `tool` | Tool name |
+| `user_id` | Authenticated user id (null if unauthenticated) |
+| `arguments` | The arguments the assistant sent |
+| `outcome` | `ok`, `error` (rejected by the tool) or `invalid` (failed validation) |
+| `error` | Error message, when not `ok` |
+| `duration_ms` | Time spent in the tool |
+
+Define the channel in `config/logging.php`, e.g. a `daily` channel writing to
+`storage/logs/database-mcp.log`. Leave the channel unset to use the application's default one.
+
+The arguments are logged as sent, so a search on a masked column (`"value": "mario@acme.it"`)
+appears in clear in the log. Protect and retain the log accordingly.
 
 ### Describing your schema
 
@@ -214,7 +387,8 @@ Call with a `table` to get its columns and relationships in both directions:
 ```
 
 Relationships come from the database foreign keys, not Eloquent — they reflect the actual
-constraints. Foreign keys pointing at denied tables are filtered out.
+constraints. Foreign keys pointing at denied tables are filtered out. Masked columns carry
+`"masked"` and `"searchable"` keys (see [Masking columns](#masking-columns)).
 
 ### `query_database`
 
@@ -226,16 +400,45 @@ constraints. Foreign keys pointing at denied tables are filtered out.
 | `aggregates` | object[] | Aggregate expressions (see [Aggregations](#aggregations--grouping)) |
 | `group_by` | string[] | Columns to group by (`table.column` or a base column) |
 | `having` | object[] | Conditions on grouped results (only with `aggregates`) |
-| `filters` | object[] | `WHERE` conditions, ANDed together |
-| `order_by` | string | Column to sort by (in aggregate mode: an alias or a group_by column) |
-| `order_direction` | `asc` \| `desc` | Sort direction |
+| `filters` | object[] | `WHERE` conditions, ANDed together (base or joined table columns) |
+| `order_by` | string | Column to sort by (`table.column` for a joined table; in aggregate mode: an alias or a group_by column) |
+| `order_direction` | `asc` \| `desc` | Sort direction for `order_by` |
+| `sort` | object[] | Sort by several columns: `[{ "column", "direction" }]`. Do not combine with `order_by` |
 | `limit` | integer | Max rows for a non-paginated query (1 to `max_limit`, default 50) |
 | `page` | integer | Page number (1-based); enables pagination |
 | `per_page` | integer | Rows per page (1 to `max_limit`, default 50) |
 | `with_total` | boolean | Include `total`/`last_page` (extra COUNT; ignored in aggregate mode) |
 
-A filter is `{ "column", "operator", "value" }`. Operators: `=`, `!=`, `>`, `>=`, `<`, `<=`,
-`like` (the `like` value is wrapped in `%…%` automatically).
+A filter is `{ "column", "operator", "value" }` (or `"values"` for list operators). `column` may be
+a base column or `table.column` on a joined table.
+
+| Operator | Uses | Meaning |
+|----------|------|---------|
+| `=`, `!=`, `>`, `>=`, `<`, `<=` | `value` | Comparison |
+| `like`, `not_like` | `value` | Contains / does not contain (wrapped in `%…%` automatically) |
+| `starts_with`, `ends_with` | `value` | Prefix / suffix match |
+| `in`, `not_in` | `values` | Value is (not) in the list |
+| `between` | `values` | `[min, max]`, inclusive |
+| `is_null`, `is_not_null` | — | Null checks |
+
+On [masked columns](#masking-columns) only `is_null`, `is_not_null` and, when searchable, `=` are
+accepted.
+
+```json
+{
+  "table": "orders",
+  "filters": [
+    { "column": "status", "operator": "in", "values": ["paid", "shipped"] },
+    { "column": "created_at", "operator": "between", "values": ["2026-01-01", "2026-03-31"] },
+    { "column": "cancelled_at", "operator": "is_null" }
+  ],
+  "sort": [
+    { "column": "total", "direction": "desc" },
+    { "column": "code" }
+  ]
+}
+```
+
 
 #### Simple query
 
@@ -273,6 +476,19 @@ A join object accepts:
 The join condition is derived automatically from the foreign key. When a join is present, result
 keys are prefixed with the table name so columns never collide (`orders.code`, `users.email`).
 
+Filters and sorting may reference joined columns as `table.column`; a bare column name always
+refers to the base table:
+
+```json
+{
+  "table": "orders",
+  "columns": ["code", "total"],
+  "joins": [ { "table": "users", "on": "user_id", "columns": ["email"] } ],
+  "filters": [ { "column": "users.email", "operator": "ends_with", "value": "@acme.com" } ],
+  "sort": [ { "column": "users.email" }, { "column": "total", "direction": "desc" } ]
+}
+```
+
 #### Disambiguating relationships
 
 When two tables are linked by several foreign keys (e.g. `orders.user_id` and `orders.created_by`
@@ -306,8 +522,8 @@ An aggregate object accepts:
 - `alias` (required) — the result key (letters, digits, underscore).
 - `distinct` — aggregate distinct values, e.g. `COUNT(DISTINCT column)`.
 
-`having` filters the grouped rows; each `target` must be an aggregate alias or a `group_by` column,
-with the same operators as filters. Sample response:
+`having` filters the grouped rows; each `target` must be an aggregate alias or a `group_by` column.
+It accepts the comparison operators (`=`, `!=`, `>`, `>=`, `<`, `<=`) and `like`. Sample response:
 
 ```json
 {
@@ -353,7 +569,10 @@ Without pagination, use `limit` for a simple capped result.
 
 ```bash
 composer install
-vendor/bin/pest
+composer test        # Pest
+composer lint        # Pint (check only)
+composer analyse     # PHPStan
+composer rector:dry  # Rector (check only)
 ```
 
 The suite runs against an in-memory SQLite database via Orchestra Testbench.

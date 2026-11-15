@@ -7,6 +7,8 @@ namespace Datomatic\LaravelDatabaseMcp\Tools;
 use const JSON_UNESCAPED_SLASHES;
 use const JSON_UNESCAPED_UNICODE;
 
+use Datomatic\LaravelDatabaseMcp\Support\AuditLog;
+use Datomatic\LaravelDatabaseMcp\Support\ColumnMask;
 use Datomatic\LaravelDatabaseMcp\Tools\Concerns\InteractsWithDatabaseSchema;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
@@ -22,7 +24,7 @@ use function array_values;
 use function in_array;
 use function json_encode;
 
-#[Description("Inspect the database structure. Without arguments returns the list of allowed tables and their relationships (foreign keys). With a table argument returns that table's columns, types and relationships. Use this before query_database to discover table and column names.")]
+#[Description("Inspect the database structure. Without arguments returns the list of allowed tables and their relationships (foreign keys). With a table argument returns that table's columns, types and relationships; masked columns are flagged with their masking strategy and whether they can be searched by exact value. Use this before query_database to discover table and column names.")]
 class DescribeDatabaseTool extends Tool
 {
     use InteractsWithDatabaseSchema;
@@ -30,6 +32,11 @@ class DescribeDatabaseTool extends Tool
     protected string $name = 'describe_database';
 
     public function handle(Request $request): Response
+    {
+        return AuditLog::record($this->name, $request, fn (): Response => $this->describe($request));
+    }
+
+    private function describe(Request $request): Response
     {
         $validated = $request->validate([
             'table' => ['string'],
@@ -66,13 +73,7 @@ class DescribeDatabaseTool extends Tool
         $allowedColumns = $this->allowedColumns($table);
 
         $columns = array_values(array_map(
-            fn (array $column): array => array_filter([
-                'name' => $column['name'],
-                'type' => $column['type'],
-                'nullable' => $column['nullable'],
-                'default' => $column['default'],
-                'description' => $this->columnDescription($table, $column['name']),
-            ], static fn (mixed $value, string $key): bool => $key !== 'description' || $value !== null, ARRAY_FILTER_USE_BOTH),
+            fn (array $column): array => $this->describeColumn($table, $column),
             array_filter(
                 $this->schemaBuilder()->getColumns($table),
                 static fn (array $column): bool => in_array($column['name'], $allowedColumns, true),
@@ -86,6 +87,35 @@ class DescribeDatabaseTool extends Tool
             'references' => $this->outgoingRelationships($table),
             'referenced_by' => $this->incomingRelationships($table),
         ], static fn (mixed $value): bool => $value !== null));
+    }
+
+    /**
+     * @param  array{name: string, type: string, nullable: bool, default: mixed}  $column
+     * @return array<string, mixed>
+     */
+    private function describeColumn(string $table, array $column): array
+    {
+        $description = [
+            'name' => $column['name'],
+            'type' => $column['type'],
+            'nullable' => $column['nullable'],
+            'default' => $column['default'],
+        ];
+
+        $comment = $this->columnDescription($table, $column['name']);
+
+        if ($comment !== null) {
+            $description['description'] = $comment;
+        }
+
+        $mask = $this->columnMask($table, $column['name']);
+
+        if ($mask instanceof ColumnMask) {
+            $description['masked'] = $mask->strategy;
+            $description['searchable'] = $mask->searchable;
+        }
+
+        return $description;
     }
 
     /**

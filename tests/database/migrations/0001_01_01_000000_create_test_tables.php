@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -19,6 +20,7 @@ return new class extends Migration
             $table->id();
             $table->string('email');
             $table->string('firstname')->nullable();
+            $table->string('phone')->nullable();
             $table->string('password');
             $table->string('remember_token')->nullable();
         });
@@ -36,5 +38,12 @@ return new class extends Migration
             $table->string('email')->primary();
             $table->string('token');
         });
+
+        Schema::create('telescope_entries', function (Blueprint $table): void {
+            $table->id();
+            $table->text('content');
+        });
+
+        DB::statement('CREATE VIEW order_codes AS SELECT id, code, total FROM orders');
     }
 };
