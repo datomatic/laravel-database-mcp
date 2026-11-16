@@ -35,6 +35,11 @@ trait InteractsWithDatabaseSchema
     private array $allowedColumnsCache = [];
 
     /**
+     * @var array<string, list<string>>
+     */
+    private array $columnListingCache = [];
+
+    /**
      * @return list<string>
      */
     private function deniedTables(): array
@@ -146,7 +151,7 @@ trait InteractsWithDatabaseSchema
 
         return $this->allowedTablesCache = array_values(array_filter(
             $names,
-            $this->isTableExposed(...),
+            fn (string $table): bool => $this->isTableExposed($table) && $this->isTableTenantSafe($table),
         ));
     }
 
@@ -156,9 +161,52 @@ trait InteractsWithDatabaseSchema
     private function allowedColumns(string $table): array
     {
         return $this->allowedColumnsCache[$table] ??= array_values(array_filter(
-            $this->schemaBuilder()->getColumnListing($table),
-            fn (string $column): bool => ! $this->isColumnDenied($table, $column),
+            $this->columnListing($table),
+            fn (string $column): bool => $column !== $this->tenantColumn() && ! $this->isColumnDenied($table, $column),
         ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function columnListing(string $table): array
+    {
+        return $this->columnListingCache[$table] ??= array_values($this->schemaBuilder()->getColumnListing($table));
+    }
+
+    /**
+     * The column holding the tenant key, or null when tenant scoping is off.
+     */
+    private function tenantColumn(): ?string
+    {
+        $column = config('database-mcp.tenant.column');
+
+        return is_string($column) && $column !== '' ? $column : null;
+    }
+
+    /**
+     * Whether rows of the table must be filtered on the tenant column.
+     */
+    private function isTenantScoped(string $table): bool
+    {
+        $column = $this->tenantColumn();
+
+        return $column !== null && in_array($column, $this->columnListing($table), true);
+    }
+
+    /**
+     * With tenant scoping on, a table without the tenant column is hidden
+     * unless it is declared as shared: a child table (e.g. order_items) that
+     * only reaches the tenant through its parent would otherwise leak rows
+     * of every tenant.
+     */
+    private function isTableTenantSafe(string $table): bool
+    {
+        if ($this->tenantColumn() === null || $this->isTenantScoped($table)) {
+            return true;
+        }
+
+        return $this->matchesAny($table, array_values((array) config('database-mcp.tenant.shared_tables', [])));
     }
 
     private function isColumnDenied(string $table, string $column): bool

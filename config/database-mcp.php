@@ -160,6 +160,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Tenant Scoping
+    |--------------------------------------------------------------------------
+    |
+    | For single-database multi-tenant applications. When "column" is set,
+    | every query is restricted to the tenant returned by the resolver you
+    | register with DatabaseMcp::resolveTenantUsing() in a service provider:
+    | the base table and every joined table having that column are filtered
+    | on it, and the column itself is hidden.
+    |
+    | Tables without the column are hidden, unless listed (wildcards allowed)
+    | in "shared_tables" because they hold data common to every tenant.
+    |
+    */
+
+    'tenant' => [
+        'column' => env('DATABASE_MCP_TENANT_COLUMN'),
+        'shared_tables' => [
+            // 'countries',
+            // 'currencies',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Denied Tables
     |--------------------------------------------------------------------------
     |

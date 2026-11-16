@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented in this file.
 
+## 1.1.0 - 2026-11-16
+
+### Added
+
+- Tenant scoping for single-database multi-tenant applications: set `tenant.column` and register a
+  resolver with `DatabaseMcp::resolveTenantUsing()`. Queries on tables with the column are filtered
+  on the current tenant (base table in `WHERE`, joined tables in the `ON` clause), the column is
+  hidden, and tables without it are hidden unless listed in `tenant.shared_tables`. Queries are
+  rejected when no tenant is resolved.
+
 ## 1.0.0 - 2026-11-15
 
 ### Security

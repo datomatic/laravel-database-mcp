@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Datomatic\LaravelDatabaseMcp\Tests;
 
+use Datomatic\LaravelDatabaseMcp\DatabaseMcp;
 use Datomatic\LaravelDatabaseMcp\LaravelDatabaseMcpServiceProvider;
 use Laravel\Mcp\Server\McpServiceProvider;
 use Laravel\Passport\PassportServiceProvider;
@@ -17,6 +18,13 @@ abstract class TestCase extends Orchestra
 
         $this->loadMigrationsFrom(__DIR__.'/database/migrations');
         $this->loadMigrationsFrom(__DIR__.'/../vendor/laravel/passport/database/migrations');
+    }
+
+    protected function tearDown(): void
+    {
+        DatabaseMcp::resolveTenantUsing(null);
+
+        parent::tearDown();
     }
 
     /**

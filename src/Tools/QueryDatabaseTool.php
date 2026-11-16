@@ -7,11 +7,13 @@ namespace Datomatic\LaravelDatabaseMcp\Tools;
 use const JSON_UNESCAPED_SLASHES;
 use const JSON_UNESCAPED_UNICODE;
 
+use Datomatic\LaravelDatabaseMcp\DatabaseMcp;
 use Datomatic\LaravelDatabaseMcp\Support\AuditLog;
 use Datomatic\LaravelDatabaseMcp\Support\ColumnMask;
 use Datomatic\LaravelDatabaseMcp\Tools\Concerns\InteractsWithDatabaseSchema;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\JoinClause;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -132,7 +134,26 @@ class QueryDatabaseTool extends Tool
             return Response::error("Table '{$table}' is not available.");
         }
 
+        $tenant = null;
+        $tenantColumn = $this->tenantColumn();
+
+        if ($tenantColumn !== null) {
+            if (! DatabaseMcp::hasTenantResolver()) {
+                return Response::error('Tenant scoping is enabled but no tenant resolver is registered.');
+            }
+
+            $tenant = DatabaseMcp::resolveTenant($request);
+
+            if ($tenant === null) {
+                return Response::error('No tenant could be resolved for this request.');
+            }
+        }
+
         $query = $this->databaseConnection()->table($table);
+
+        if ($tenant !== null && $this->isTenantScoped($table)) {
+            $query->where($table.'.'.$tenantColumn, '=', $tenant);
+        }
 
         // Joins -------------------------------------------------------------
         $joins = $validated['joins'] ?? [];
@@ -164,10 +185,21 @@ class QueryDatabaseTool extends Tool
                 $foreignKey = reset($candidates);
             }
 
-            match ($join['type'] ?? 'left') {
-                'inner' => $query->join($related, $foreignKey['local'], '=', $foreignKey['foreign']),
-                default => $query->leftJoin($related, $foreignKey['local'], '=', $foreignKey['foreign']),
-            };
+            // The tenant condition goes in the ON clause so a left join keeps
+            // its semantics: rows of another tenant simply do not match.
+            $scopeJoin = $tenant !== null && $this->isTenantScoped($related);
+
+            $query->join(
+                $related,
+                static function (JoinClause $clause) use ($foreignKey, $scopeJoin, $related, $tenantColumn, $tenant): void {
+                    $clause->on($foreignKey['local'], '=', $foreignKey['foreign']);
+
+                    if ($scopeJoin) {
+                        $clause->where($related.'.'.$tenantColumn, '=', $tenant);
+                    }
+                },
+                type: ($join['type'] ?? 'left') === 'inner' ? 'inner' : 'left',
+            );
 
             $joinedTables[] = $related;
         }

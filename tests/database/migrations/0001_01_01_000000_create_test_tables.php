@@ -44,6 +44,25 @@ return new class extends Migration
             $table->text('content');
         });
 
+        Schema::create('projects', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('tenant_id');
+            $table->string('name');
+        });
+
+        Schema::create('tasks', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('tenant_id');
+            $table->foreignId('project_id')->constrained('projects');
+            $table->string('title');
+        });
+
+        Schema::create('task_notes', function (Blueprint $table): void {
+            $table->id();
+            $table->foreignId('task_id')->constrained('tasks');
+            $table->string('body');
+        });
+
         DB::statement('CREATE VIEW order_codes AS SELECT id, code, total FROM orders');
     }
 };

@@ -64,10 +64,12 @@ Defence is layered. From outermost to innermost:
    `denied_columns`, globally or per table).
 6. **Column masking.** Columns the assistant may use but not read in clear are anonymised
    (`masked_columns`), and the operations that could reconstruct them are blocked.
-7. **Row cap.** Results are limited (`max_limit`, default 100).
-8. **Query timeout.** Each query is capped (`query_timeout`, default 10 seconds) on MySQL, MariaDB
+7. **Tenant scoping.** In a single-database multi-tenant app, every query can be restricted to the
+   current tenant (`tenant`).
+8. **Row cap.** Results are limited (`max_limit`, default 100).
+9. **Query timeout.** Each query is capped (`query_timeout`, default 10 seconds) on MySQL, MariaDB
    and PostgreSQL.
-9. **Audit log.** Optionally log every tool call with the user, arguments and outcome (`audit_log`).
+10. **Audit log.** Optionally log every tool call with the user, arguments and outcome (`audit_log`).
 
 The tools only expose tables in the connection's own schema: the database on MySQL/MariaDB, the
 `search_path` on PostgreSQL, `main` on SQLite.
@@ -142,6 +144,8 @@ read-only. Always configure the dedicated user in any shared or production envir
 | `denied_columns` | secrets | Columns stripped from every result (`column` or `table.column`, wildcards allowed) |
 | `masked_columns` | `[]` | Columns anonymised in results instead of hidden (see [Masking columns](#masking-columns)) |
 | `mask_key` | `env('DATABASE_MCP_MASK_KEY')` | Key for the `hash` mask (null = `APP_KEY`) |
+| `tenant.column` | `env('DATABASE_MCP_TENANT_COLUMN')` | Column holding the tenant key; enables tenant scoping (see [Multi-tenant applications](#multi-tenant-applications)) |
+| `tenant.shared_tables` | `[]` | Tables without the tenant column that every tenant may read (wildcards allowed) |
 | `audit_log.enabled` | `env('DATABASE_MCP_AUDIT_LOG', false)` | Log every tool call |
 | `audit_log.channel` | `env('DATABASE_MCP_AUDIT_LOG_CHANNEL')` | Log channel for the audit log (null = default channel) |
 | `table_descriptions` | `[]` | Business meaning attached to a table |
@@ -259,6 +263,53 @@ re-identification through combinations of harmless columns (birth date + postcod
 `hash` strategy cannot be searched by token, since computing it would require the key inside the
 database; correlate pseudonymised rows through their ids and foreign keys instead. Rotating
 `APP_KEY` changes every pseudonym; set a dedicated `DATABASE_MCP_MASK_KEY` to keep them stable.
+
+### Multi-tenant applications
+
+In a single-database multi-tenant application, set the column that holds the tenant key and
+register how the current tenant is resolved:
+
+```dotenv
+DATABASE_MCP_TENANT_COLUMN=tenant_id
+```
+
+```php
+// AppServiceProvider::boot()
+use Datomatic\LaravelDatabaseMcp\DatabaseMcp;
+use Laravel\Mcp\Request;
+
+DatabaseMcp::resolveTenantUsing(fn (Request $request) => $request->user()?->tenant_id);
+```
+
+The resolver is registered in code rather than in the config file because closures cannot be
+cached by `config:cache`. It receives the MCP request and returns the tenant key (an int or a
+non-empty string), or `null` when there is none.
+
+Once enabled:
+
+| | Behaviour |
+|---|---|
+| Base table with the column | Every query gets `WHERE table.tenant_id = <tenant>`, ANDed with the assistant's filters, so it cannot be bypassed. Aggregates and `with_total` are scoped too. |
+| Joined table with the column | The condition goes in the join's `ON` clause: rows of another tenant never match, even on a left join. |
+| Tenant column | Hidden from results, filters and `describe_database`; its value is implicit. |
+| Table without the column | Hidden, unless it matches `tenant.shared_tables` (lookup data common to every tenant, e.g. `countries`). |
+| No tenant resolved, or no resolver registered | The query is rejected. |
+
+```php
+'tenant' => [
+    'column' => env('DATABASE_MCP_TENANT_COLUMN'),
+    'shared_tables' => ['countries', 'currencies'],
+],
+```
+
+Child tables that reach the tenant only through a parent (`order_items` → `orders.tenant_id`) are
+hidden, because nothing in the row ties them to a tenant. Add the tenant column to them, or expose
+them through a view that includes it (with `include_views`). There is no cross-tenant mode: give
+admins who need it a separate server or connection.
+
+On PostgreSQL you can add [row-level security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
+on the read-only connection as a second layer that holds even if the application filter were
+bypassed.
 
 ### Views
 

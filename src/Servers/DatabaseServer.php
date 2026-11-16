@@ -10,7 +10,7 @@ use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Attributes\Version;
 use Laravel\Mcp\Server\Contracts\Transport;
 
-#[Version('1.0.0')]
+#[Version('1.1.0')]
 class DatabaseServer extends Server
 {
     protected array $tools = [
