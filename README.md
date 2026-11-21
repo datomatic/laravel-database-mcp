@@ -8,9 +8,9 @@
 
 # Laravel Database MCP
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/datomatic/laravel-database-mcp.svg)](https://packagist.org/packages/datomatic/laravel-database-mcp)
-[![Total Downloads](https://img.shields.io/packagist/dt/datomatic/laravel-database-mcp.svg)](https://packagist.org/packages/datomatic/laravel-database-mcp)
-[![CI](https://github.com/datomatic/laravel-database-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/datomatic/laravel-database-mcp/actions/workflows/ci.yml)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/datomatic/laravel-database-mcp.svg?style=for-the-badge)](https://packagist.org/packages/datomatic/laravel-database-mcp)
+[![GitHub CI Action Status](https://img.shields.io/github/actions/workflow/status/datomatic/laravel-database-mcp/ci.yml?branch=main&label=ci&color=5FE8B3&style=for-the-badge)](https://github.com/datomatic/laravel-database-mcp/actions/workflows/ci.yml)
+[![Total Downloads](https://img.shields.io/packagist/dt/datomatic/laravel-database-mcp.svg?style=for-the-badge)](https://packagist.org/packages/datomatic/laravel-database-mcp)
 
 A read-only [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
 (Claude Code, Cursor, …) explore and query your Laravel application's database through safe,
